@@ -114,7 +114,11 @@ def test_sentinel_contradiction_never_auto_rejects() -> None:
 
 def test_duplicate_is_separate_from_plausibility_score() -> None:
     model = decide_from_existing_model(
-        {"clasificacion_modelo": "playa", "confianza_modelo": 90}
+        {
+            "estado": "POSIBLE_NUEVO_ATRACTIVO",
+            "clasificacion_modelo": "playa",
+            "confianza_modelo": 90,
+        }
     )
     decision = build_multimodal_decision(
         model=model,
@@ -134,7 +138,11 @@ def test_duplicate_is_separate_from_plausibility_score() -> None:
 
 def test_existing_place_contribution_is_not_rejected_as_duplicate() -> None:
     model = decide_from_existing_model(
-        {"clasificacion_modelo": "playa", "confianza_modelo": 90}
+        {
+            "estado": "POSIBLE_NUEVO_ATRACTIVO",
+            "clasificacion_modelo": "playa",
+            "confianza_modelo": 90,
+        }
     )
     decision = build_multimodal_decision(
         model=model,
@@ -156,4 +164,102 @@ def test_existing_place_contribution_is_not_rejected_as_duplicate() -> None:
         minimum_coverage=0.5,
     )
     assert decision.status == EvidenceStatus.CANDIDATE
+
+
+def test_invalid_model_result_is_rejected_even_with_strong_signals() -> None:
+    model = decide_from_existing_model(
+        {
+            "estado": "IMAGEN_NO_VALIDA",
+            "clasificacion_modelo": "nevado",
+            "confianza_modelo": 99,
+        }
+    )
+    decision = build_multimodal_decision(
+        model=model,
+        evidence={"latitude": -12.0, "longitude": -77.0},
+        geospatial={
+            "coherence": {
+                "score": 0.9,
+                "coverage": 1.0,
+                "has_contradiction": False,
+            }
+        },
+        duplicate_result={"status": "no_match"},
+    )
+    assert decision.status == EvidenceStatus.REJECTED
+    assert decision.category is None
+    assert decision.confidence == 0
+    assert decision.score == 0
+
+
+def test_doubtful_model_result_requires_review() -> None:
+    model = decide_from_existing_model(
+        {
+            "estado": "CASO_DUDOSO",
+            "clasificacion_modelo": "bosque",
+            "confianza_modelo": 95,
+        }
+    )
+    decision = build_multimodal_decision(
+        model=model,
+        evidence={"latitude": -12.0, "longitude": -77.0},
+        geospatial={"coherence": {"score": 0.9, "coverage": 1.0}},
+        duplicate_result={"status": "no_match"},
+    )
+    assert decision.status == EvidenceStatus.NEEDS_REVIEW
+    assert decision.category is None
+    assert decision.confidence == 0
+
+
+def test_doubtful_conflicting_category_is_kept_only_in_raw_model_result() -> None:
+    raw_result = {
+        "estado": "CASO_DUDOSO",
+        "clasificacion_modelo": "lago",
+        "confianza_modelo": 99.7,
+        "fusion": {
+            "clase_final": "lago",
+            "conflicto_gemma": True,
+            "senales": ["lago", "lago", "bosque"],
+        },
+        "gemma": {
+            "clase": "bosque",
+            "validacion": "TURISTICO",
+            "tipo_contenido": "captura_directa",
+        },
+    }
+    model = decide_from_existing_model(raw_result)
+    decision = build_multimodal_decision(
+        model=model,
+        evidence={"latitude": -11.989, "longitude": -76.836},
+        geospatial={
+            "coherence": {
+                "score": 0.25,
+                "coverage": 0.5,
+                "has_contradiction": True,
+            }
+        },
+        duplicate_result={"status": "no_match"},
+    )
+
+    assert model.category == "lago"
+    assert decision.status == EvidenceStatus.NEEDS_REVIEW
+    assert decision.category is None
+    assert decision.confidence == 0
+
+
+def test_low_visual_confidence_requires_review() -> None:
+    model = decide_from_existing_model(
+        {
+            "estado": "POSIBLE_NUEVO_ATRACTIVO",
+            "clasificacion_modelo": "nevado",
+            "confianza_modelo": 54,
+        }
+    )
+    decision = build_multimodal_decision(
+        model=model,
+        evidence={"latitude": -12.0, "longitude": -77.0},
+        geospatial={"coherence": {"score": 0.9, "coverage": 1.0}},
+        duplicate_result={"status": "no_match"},
+    )
+    assert decision.status == EvidenceStatus.NEEDS_REVIEW
 

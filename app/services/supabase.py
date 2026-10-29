@@ -9,6 +9,17 @@ from app.core.config import Settings
 from app.core.errors import ConfigurationError, ExternalServiceError, ResourceNotFoundError
 
 
+def _json_safe(value: Any) -> Any:
+    """Replace non-finite floats because strict JSON and PostgREST reject them."""
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 class SupabaseRepository:
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -26,6 +37,8 @@ class SupabaseRepository:
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         request_headers = {**self._headers, **kwargs.pop("headers", {})}
+        if "json" in kwargs:
+            kwargs["json"] = _json_safe(kwargs["json"])
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.request(
                 method,

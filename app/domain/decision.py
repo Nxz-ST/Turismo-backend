@@ -99,11 +99,18 @@ def build_multimodal_decision(
     duplicate_result: dict[str, Any] | None = None,
     candidate_threshold: float = 0.75,
     minimum_coverage: float = 0.70,
+    minimum_visual_confidence: float = 0.65,
     rule_version: str = "multimodal-v1",
 ) -> MultimodalDecision:
     """Combina evidencia sin convertir Sentinel o MINCETUR en rechazo automático."""
     capture = _capture_component(evidence)
-    visual_available = model.category is not None and model.confidence > 0
+    visual_is_conclusive = model.status not in {
+        EvidenceStatus.REJECTED,
+        EvidenceStatus.NEEDS_REVIEW,
+    }
+    visual_available = (
+        visual_is_conclusive and model.category is not None and model.confidence > 0
+    )
     visual = ScoreComponent(
         score=model.confidence if visual_available else 0.0,
         weight=0.45,
@@ -111,7 +118,12 @@ def build_multimodal_decision(
         explanation=(
             f"Modelo visual: {model.category} con {model.confidence:.0%} de confianza."
             if visual_available
-            else "El modelo visual no produjo una categoría utilizable."
+            else (
+                "La clasificación visual fue descartada porque el motor marcó "
+                "la imagen como inválida o no concluyente."
+                if model.category is not None
+                else "El modelo visual no produjo una categoría utilizable."
+            )
         ),
     )
     coherence = geospatial.get("coherence") or {}
@@ -149,7 +161,19 @@ def build_multimodal_decision(
         and evidence.get("target_place_id") is not None
     )
 
-    if duplicate_status == "high_match" and not is_existing_place:
+    if model.status == EvidenceStatus.REJECTED:
+        status = EvidenceStatus.REJECTED
+        outcome = "El motor visual marcó la imagen como no turística o no válida."
+    elif model.status == EvidenceStatus.NEEDS_REVIEW:
+        status = EvidenceStatus.NEEDS_REVIEW
+        outcome = "El motor visual consideró la imagen ambigua; se requiere revisión humana."
+    elif model.confidence < minimum_visual_confidence:
+        status = EvidenceStatus.NEEDS_REVIEW
+        outcome = (
+            "La confianza visual está por debajo del umbral requerido; "
+            "se necesita revisión humana."
+        )
+    elif duplicate_status == "high_match" and not is_existing_place:
         status = EvidenceStatus.DUPLICATE
         outcome = "Se detectó una coincidencia geográfica alta; requiere verificación de duplicidad."
     elif contradiction:
@@ -173,11 +197,24 @@ def build_multimodal_decision(
         f"{outcome} Plausibilidad {score:.0%}; cobertura {coverage:.0%}. "
         "Sentinel actúa solo como confirmación de coherencia."
     )
+
+    # Una categoría conflictiva o inválida solo permanece en raw_result para
+    # auditoría. No debe publicarse en la evidencia como si fuera una predicción
+    # confiable (por ejemplo, mostrar "lago" en un CASO_DUDOSO).
+    published_category = model.category
+    published_confidence = model.confidence
+    published_score = round(score, 4)
+    if model.status in {EvidenceStatus.REJECTED, EvidenceStatus.NEEDS_REVIEW}:
+        published_category = None
+        published_confidence = 0.0
+    if model.status == EvidenceStatus.REJECTED:
+        published_score = 0.0
+
     return MultimodalDecision(
         status=status,
-        category=model.category,
-        confidence=model.confidence,
-        score=round(score, 4),
+        category=published_category,
+        confidence=published_confidence,
+        score=published_score,
         coverage=round(coverage, 4),
         reason=reason,
         duplicate_status=duplicate_status,

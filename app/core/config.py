@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     decision_rule_version: str = "multimodal-v1"
     candidate_score_threshold: float = 0.75
     minimum_evidence_coverage: float = 0.70
+    minimum_visual_confidence: float = Field(default=0.65, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def validate_production_configuration(self) -> "Settings":

@@ -479,7 +479,11 @@ function evaluatePixel(s) {
                 if mean is None or int(stats.get("sampleCount") or 0) == 0:
                     valid = False
                     break
-                row[key] = round(float(mean), 4)
+                number = float(mean)
+                if not math.isfinite(number):
+                    valid = False
+                    break
+                row[key] = round(number, 4)
             if valid:
                 result.append(row)
         return result
@@ -502,9 +506,10 @@ function evaluatePixel(s) {
     @staticmethod
     def _number(value: Any) -> float | None:
         try:
-            return float(value) if value is not None else None
+            number = float(value) if value is not None else None
         except (TypeError, ValueError):
             return None
+        return number if number is not None and math.isfinite(number) else None
 
     @staticmethod
     def _iso(value: datetime) -> str:

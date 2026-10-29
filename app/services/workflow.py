@@ -128,6 +128,9 @@ class ValidationWorkflow:
                     duplicate_result=duplicate_result,
                     candidate_threshold=self._settings.candidate_score_threshold,
                     minimum_coverage=self._settings.minimum_evidence_coverage,
+                    minimum_visual_confidence=(
+                        self._settings.minimum_visual_confidence
+                    ),
                     rule_version=self._settings.decision_rule_version,
                 )
                 source = self._settings.decision_rule_version
