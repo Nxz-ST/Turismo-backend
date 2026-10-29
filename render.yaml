@@ -1,0 +1,55 @@
+services:
+  - type: web
+    name: rutaamiga-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_NAME
+        value: RutaAmiga API
+      - key: API_V1_PREFIX
+        value: /api/v1
+      - key: ALLOWED_ORIGINS
+        value: '["http://127.0.0.1:3000","http://localhost:3000"]'
+      - key: MAX_REQUEST_BYTES
+        value: "2000000"
+      - key: PROCESS_JOBS_INLINE
+        value: "true"
+      - key: SENTINEL_ENABLED
+        value: "false"
+      - key: PERUSAT_ENABLED
+        value: "false"
+      - key: DECISION_RULE_VERSION
+        value: multimodal-v1
+      - key: CANDIDATE_SCORE_THRESHOLD
+        value: "0.75"
+      - key: MINIMUM_EVIDENCE_COVERAGE
+        value: "0.70"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: R2_ENDPOINT_URL
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: AI_SERVICE_BASE_URL
+        sync: false
+      - key: AI_SERVICE_TIMEOUT_SECONDS
+        value: "180"
+      - key: SENTINEL_CLIENT_ID
+        sync: false
+      - key: SENTINEL_CLIENT_SECRET
+        sync: false
