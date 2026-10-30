@@ -26,7 +26,8 @@ cd /ruta/al/turismo_backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
-cp .env.example .env
+# Crea un archivo .env local con las credenciales entregadas por el responsable
+# del proyecto. Los archivos de entorno no se versionan.
 uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
