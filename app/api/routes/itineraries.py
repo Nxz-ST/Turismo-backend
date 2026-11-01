@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query
 from app.api.deps import CurrentUser, SettingsDep
 from app.core.errors import ConfigurationError, ExternalServiceError
 from app.services.google_maps import GoogleMapsService
+from app.services.storage import R2StorageService
 from app.services.supabase import SupabaseRepository
 
 
@@ -131,15 +132,27 @@ def _official(row: dict) -> dict:
 
 
 def _community(row: dict) -> dict:
+    category = str(row.get("categoria_ia") or "Por determinar")
+    raw_description = str(row.get("descripcion") or "").strip()
+    description = (
+        raw_description
+        if len(raw_description) >= 20
+        else (
+            f"Descubrimiento de la comunidad validado como {category}. "
+            "La información detallada todavía está en verificación."
+        )
+    )
     return {
         "id": f"community-{row.get('id')}",
         "name": row.get("nombre") or "Descubrimiento de la comunidad",
-        "description": row.get("descripcion") or "",
+        "description": description,
+        "user_description": raw_description,
         "latitude": float(row.get("latitud") or 0),
         "longitude": float(row.get("longitud") or 0),
-        "category": row.get("categoria_ia") or "Por determinar",
+        "category": category,
         "source": "community",
         "validation_status": row.get("estado_validacion") or "candidate",
+        "photo_url": row.get("photo_url"),
         "district": "",
         "province": "",
         "altitude_m": float(row.get("altitud") or 0),
@@ -154,6 +167,32 @@ def _community(row: dict) -> dict:
             "visit_information": "not_available",
         },
     }
+
+
+def _community_destination(
+    *,
+    origin: tuple[float, float],
+    stop: dict,
+    duration_minutes: int,
+    travel_mode: str,
+) -> dict | None:
+    """Build a direct visit when one validated discovery fits but no circuit does."""
+    selected = _fits_duration(
+        origin=origin,
+        stops=[stop],
+        duration_minutes=duration_minutes,
+        travel_mode=travel_mode,
+    )
+    if not selected:
+        return None
+    return _route(
+        title=f"Visita {stop.get('name') or 'un nuevo descubrimiento'}",
+        subtitle="Destino validado por la comunidad para conocer directamente",
+        kind=f"community-destination-{stop.get('id')}-{duration_minutes}-{travel_mode}",
+        origin=origin,
+        stops=selected,
+        travel_mode=travel_mode,
+    )
 
 
 def _activity_profile(stop: dict) -> dict:
@@ -448,6 +487,13 @@ async def suggested_itineraries(
             in {"validated", "approved", "validated_satellite"}
         }.values()
     )
+    storage = R2StorageService(settings)
+    for row in community_rows:
+        object_key = row.get("object_key")
+        if object_key:
+            row["photo_url"] = storage.create_download_url(
+                str(object_key), expires_in=3600
+            )
     official = [_official(row) for row in official_rows]
     community = [_community(row) for row in community_rows]
     all_stops = _mark_coordinate_quality([*official, *community])
@@ -460,12 +506,18 @@ async def suggested_itineraries(
         for stop in all_stops
         if stop.get("coordinate_quality") != "approximate_cluster"
     ]
-    safe_official = [stop for stop in safe_stops if stop["source"] == "official"]
-    safe_community = [stop for stop in safe_stops if stop["source"] == "community"]
-    all_stops.sort(
-        key=lambda stop: _distance_km(
-            latitude, longitude, stop["latitude"], stop["longitude"]
-        )
+    distance_key = lambda stop: _distance_km(
+        latitude, longitude, stop["latitude"], stop["longitude"]
+    )
+    all_stops.sort(key=distance_key)
+    safe_stops.sort(key=distance_key)
+    safe_official = sorted(
+        (stop for stop in safe_stops if stop["source"] == "official"),
+        key=distance_key,
+    )
+    safe_community = sorted(
+        (stop for stop in safe_stops if stop["source"] == "community"),
+        key=distance_key,
     )
     routes: list[dict] = []
     province = next(
@@ -628,4 +680,28 @@ async def suggested_itineraries(
                 )
             if len(routes) >= 3:
                 break
+
+    # Un descubrimiento comunitario cercano también es un destino válido por
+    # sí solo. La pantalla de Rutas no debe ocultarlo únicamente porque aún no
+    # exista una segunda parada compatible para formar un circuito.
+    if experience != "official" and safe_community:
+        direct = _community_destination(
+            origin=origin,
+            stop=safe_community[0],
+            duration_minutes=duration_minutes,
+            travel_mode=travel_mode,
+        )
+        if direct is not None:
+            direct_stop_id = str(direct["stops"][0].get("id"))
+            routes = [
+                direct,
+                *[
+                    route
+                    for route in routes
+                    if not (
+                        len(route.get("stops") or []) == 1
+                        and str(route["stops"][0].get("id")) == direct_stop_id
+                    )
+                ],
+            ][:3]
     return routes

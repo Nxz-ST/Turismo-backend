@@ -17,6 +17,25 @@ from app.services.storage import R2StorageService
 from app.services.supabase import SupabaseRepository
 
 
+def _automatic_official_match(
+    evidence: dict, duplicate_result: dict
+) -> dict | None:
+    """Return a strong official match that can safely receive the contribution."""
+    if (
+        evidence.get("contribution_type") != "new_place"
+        or duplicate_result.get("status") != "high_match"
+    ):
+        return None
+    matches = [
+        item
+        for item in duplicate_result.get("candidates") or []
+        if item.get("source") == "mincetur" and item.get("high_match")
+    ]
+    if not matches:
+        return None
+    return min(matches, key=lambda item: float(item.get("distance_m") or 999_999))
+
+
 class ValidationWorkflow:
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -93,6 +112,42 @@ class ValidationWorkflow:
                 duplicate_result = await self._duplicate_context(
                     evidence, model_decision.category
                 )
+                official_match = _automatic_official_match(
+                    evidence, duplicate_result
+                )
+                if official_match is not None:
+                    place = await self._repository.get_tourist_place(
+                        int(official_match["id"])
+                    )
+                    evidence = await self._repository.update_evidence(
+                        evidence_id,
+                        {
+                            "contribution_type": "existing_place",
+                            "target_place_id": int(place["id"]),
+                            "target_place_snapshot": {
+                                "id": place.get("id"),
+                                "codigo": place.get("codigo"),
+                                "nombre": place.get("nombre"),
+                                "categoria": place.get("categoria_texto"),
+                                "departamento": place.get("departamento"),
+                                "provincia": place.get("provincia"),
+                                "distrito": place.get("distrito"),
+                                "latitud": place.get("latitud"),
+                                "longitud": place.get("longitud"),
+                                "linked_automatically": True,
+                            },
+                            "target_distance_m": official_match.get("distance_m"),
+                        },
+                    )
+                    duplicate_result["status"] = "linked_target"
+                    duplicate_result["target_place_id"] = place["id"]
+                    duplicate_result["target_distance_m"] = official_match.get(
+                        "distance_m"
+                    )
+                    duplicate_result["note"] = (
+                        "RutaAmiga reconoció un atractivo oficial cercano y "
+                        "guardó la evidencia como un aporte adicional."
+                    )
                 if (
                     evidence.get("contribution_type") == "existing_place"
                     and evidence.get("target_place_id") is not None

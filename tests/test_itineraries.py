@@ -1,4 +1,6 @@
 from app.api.routes.itineraries import (
+    _community,
+    _community_destination,
     _decode_polyline,
     _distance_km,
     _fits_duration,
@@ -173,3 +175,47 @@ def test_official_place_uses_approved_access_for_navigation() -> None:
     assert place["navigation_coordinate_role"] == "access_point"
     assert place["coordinate_quality"] == "verified_access"
     assert place["provenance"]["coordinates"] == "verified_access_point"
+
+
+def test_short_community_description_gets_honest_fallback() -> None:
+    place = _community(
+        {
+            "id": "community-id",
+            "nombre": "Laguna de prueba",
+            "descripcion": "laguna",
+            "latitud": -11.98,
+            "longitud": -76.83,
+            "categoria_ia": "lago",
+            "estado_validacion": "validated",
+            "photo_url": "https://example.test/photo.jpg",
+        }
+    )
+
+    assert place["user_description"] == "laguna"
+    assert "información detallada" in place["description"]
+    assert place["photo_url"] == "https://example.test/photo.jpg"
+
+
+def test_validated_community_place_can_be_a_direct_destination() -> None:
+    stop = _community(
+        {
+            "id": "community-id",
+            "nombre": "Laguna de prueba",
+            "descripcion": "Una laguna registrada por la comunidad.",
+            "latitud": -11.989,
+            "longitud": -76.837,
+            "categoria_ia": "lago",
+            "estado_validacion": "validated",
+        }
+    )
+
+    route = _community_destination(
+        origin=(-11.989, -76.837),
+        stop=stop,
+        duration_minutes=300,
+        travel_mode="driving",
+    )
+
+    assert route is not None
+    assert route["title"] == "Visita Laguna de prueba"
+    assert [item["id"] for item in route["stops"]] == ["community-community-id"]
