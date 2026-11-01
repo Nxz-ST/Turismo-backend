@@ -1,4 +1,6 @@
-from app.services.workflow import _automatic_official_match
+import pytest
+
+from app.services.workflow import ValidationWorkflow, _automatic_official_match
 
 
 def test_new_contribution_uses_nearest_strong_official_match() -> None:
@@ -44,3 +46,39 @@ def test_community_match_stays_for_human_consolidation() -> None:
     )
 
     assert match is None
+
+
+@pytest.mark.asyncio
+async def test_validated_nearby_place_with_other_category_is_conflict() -> None:
+    class Repository:
+        async def nearby_places(self, *_args):
+            return []
+
+        async def nearby_community_places(self, *_args):
+            return [
+                {
+                    "id": "3eb59196-9987-4691-8e9b-c3637266a65e",
+                    "nombre": "Laguna Azul",
+                    "latitud": -11.98903,
+                    "longitud": -76.83690,
+                    "categoria_ia": "lago",
+                    "estado_validacion": "validated",
+                }
+            ]
+
+    workflow = object.__new__(ValidationWorkflow)
+    workflow._repository = Repository()
+
+    result = await workflow._duplicate_context(
+        {
+            "id": "new-evidence",
+            "name": "Laguna Azul",
+            "latitude": -11.98903,
+            "longitude": -76.83690,
+        },
+        "bosque",
+    )
+
+    assert result["status"] == "category_conflict"
+    assert result["expected_category"] == "lago"
+    assert result["observed_category"] == "bosque"

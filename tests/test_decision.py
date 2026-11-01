@@ -203,6 +203,45 @@ def test_existing_place_contribution_far_from_target_needs_review() -> None:
     assert "demasiado lejos" in decision.reason
 
 
+def test_different_category_at_validated_community_place_is_rejected() -> None:
+    decision = build_multimodal_decision(
+        model=PreliminaryDecision(
+            status=EvidenceStatus.CANDIDATE,
+            category="bosque",
+            confidence=0.94,
+            score=0.90,
+            reason="Bosque detectado",
+        ),
+        evidence={
+            "contribution_type": "new_place",
+            "gps_accuracy_m": 8,
+            "capture_source": "camera",
+            "captured_at": datetime.now(UTC).isoformat(),
+            "content_hash": "abc",
+            "presence_status": "confirmed",
+        },
+        geospatial={
+            "coherence": {
+                "score": 0.9,
+                "coverage": 1.0,
+                "explanation": "Entorno disponible",
+                "has_contradiction": False,
+            }
+        },
+        duplicate_result={
+            "status": "category_conflict",
+            "expected_category": "lago",
+            "observed_category": "bosque",
+        },
+    )
+
+    assert decision.status == EvidenceStatus.REJECTED
+    assert decision.category is None
+    assert decision.confidence == 0
+    assert "validado como lago" in decision.reason
+    assert "otro ángulo" in decision.reason
+
+
 def test_invalid_model_result_is_rejected_even_with_strong_signals() -> None:
     model = decide_from_existing_model(
         {

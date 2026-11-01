@@ -183,6 +183,15 @@ def build_multimodal_decision(
             "La ubicación de la captura está demasiado lejos del lugar existente; "
             "el aporte no se asociará sin revisión humana."
         )
+    elif duplicate_status == "category_conflict":
+        status = EvidenceStatus.REJECTED
+        expected = str(duplicate.get("expected_category") or "registrada")
+        observed = str(duplicate.get("observed_category") or "otra categoría")
+        outcome = (
+            f"Este lugar está validado como {expected}, pero la fotografía parece "
+            f"corresponder a {observed}. Solo podemos validar una imagen donde se "
+            f"reconozca claramente {expected}; toma otra fotografía desde otro ángulo."
+        )
     elif duplicate_status == "high_match" and not is_existing_place:
         status = EvidenceStatus.DUPLICATE
         outcome = "Se detectó una coincidencia geográfica alta; requiere verificación de duplicidad."
@@ -217,7 +226,9 @@ def build_multimodal_decision(
     if model.status in {EvidenceStatus.REJECTED, EvidenceStatus.NEEDS_REVIEW}:
         published_category = None
         published_confidence = 0.0
-    if model.status == EvidenceStatus.REJECTED:
+    if status == EvidenceStatus.REJECTED:
+        published_category = None
+        published_confidence = 0.0
         published_score = 0.0
 
     return MultimodalDecision(

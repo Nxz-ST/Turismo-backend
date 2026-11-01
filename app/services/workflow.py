@@ -332,7 +332,30 @@ class ValidationWorkflow:
         candidates = [item for item in candidates if item is not None]
         high_matches = [item for item in candidates if item["high_match"]]
 
-        if high_matches:
+        category_conflicts = [
+            item
+            for item in candidates
+            if item.get("source") == "community"
+            and item.get("status") == "validated"
+            and float(
+                item["distance_m"]
+                if item.get("distance_m") is not None
+                else 999_999
+            )
+            <= 25
+            and item.get("candidate_category")
+            and predicted_category
+            and not item.get("category_match")
+        ]
+        same_category_community = [
+            item
+            for item in high_matches
+            if item.get("source") == "community" and item.get("category_match")
+        ]
+
+        if category_conflicts and not same_category_community:
+            status = "category_conflict"
+        elif high_matches:
             status = "high_match"
         elif candidates or official or community:
             status = "nearby_match"
@@ -340,7 +363,7 @@ class ValidationWorkflow:
             status = "not_evaluated"
         else:
             status = "no_match"
-        return {
+        result = {
             "status": status,
             "official_matches": len(official),
             "community_matches": len(community),
@@ -351,6 +374,28 @@ class ValidationWorkflow:
             "errors": errors,
             "note": "La coincidencia indica posible duplicidad, no validez del lugar.",
         }
+        if status == "category_conflict":
+            conflict = min(
+                category_conflicts,
+                key=lambda item: float(
+                    item["distance_m"]
+                    if item.get("distance_m") is not None
+                    else 999_999
+                ),
+            )
+            result.update(
+                {
+                    "expected_category": conflict.get("candidate_category"),
+                    "observed_category": predicted_category,
+                    "conflicting_place_id": conflict.get("id"),
+                    "conflicting_place_name": conflict.get("name"),
+                    "note": (
+                        "La categoría visual no coincide con el lugar comunitario "
+                        "validado en estas coordenadas."
+                    ),
+                }
+            )
+        return result
 
     @classmethod
     def _duplicate_candidate(
@@ -386,6 +431,7 @@ class ValidationWorkflow:
             "name": name,
             "source": source,
             "status": row.get("estado_validacion") or row.get("status"),
+            "candidate_category": row_category or None,
             "distance_m": round(distance, 1),
             "name_similarity": round(similarity, 3),
             "category_match": category_match,

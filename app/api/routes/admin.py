@@ -168,9 +168,21 @@ async def decide_review(
             )
         if payload.status == "validated":
             latest = await repository.latest_results_for([str(evidence_id)])
+            latest_result = latest.get(str(evidence_id)) or {}
+            duplicate_result = latest_result.get("duplicate_result") or {}
+            if duplicate_result.get("status") == "category_conflict":
+                expected = duplicate_result.get("expected_category") or "registrada"
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"No se puede validar: el lugar está registrado como {expected} "
+                        "y la fotografía corresponde a otra categoría. Solicita una "
+                        "nueva fotografía del atractivo."
+                    ),
+                )
             duplicate = await _validated_community_duplicate(
                 repository,
-                latest.get(str(evidence_id)) or {},
+                latest_result,
             )
             if duplicate is not None:
                 canonical, match = duplicate
