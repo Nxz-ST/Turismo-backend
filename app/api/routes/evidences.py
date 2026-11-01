@@ -22,6 +22,19 @@ def _with_photo_url(row: dict, storage: R2StorageService) -> dict:
     return result
 
 
+def _with_public_community_description(row: dict) -> dict:
+    result = dict(row)
+    description = str(result.get("descripcion") or "").strip()
+    if len(description) < 20:
+        category = str(result.get("categoria_ia") or "atractivo turístico")
+        result["descripcion"] = (
+            f"Descubrimiento de la comunidad validado como {category}. "
+            "La información detallada todavía está en verificación."
+        )
+        result["descripcion_usuario"] = description
+    return result
+
+
 def _handle_service_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ResourceNotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
@@ -158,10 +171,12 @@ async def nearby_reported_places(
             radius,
         )
         storage = R2StorageService(settings)
-        for row in rows:
+        for index, raw_row in enumerate(rows):
+            row = _with_public_community_description(raw_row)
             object_key = row.pop("object_key", None)
             if object_key:
                 row["foto_url"] = storage.create_download_url(object_key, expires_in=900)
+            rows[index] = row
         return rows
     except (ConfigurationError, ExternalServiceError) as exc:
         raise _handle_service_error(exc) from exc
