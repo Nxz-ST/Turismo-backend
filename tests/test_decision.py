@@ -1,7 +1,10 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from app.domain.decision import (
     EvidenceStatus,
+    PreliminaryDecision,
     build_multimodal_decision,
     decide_from_existing_model,
 )
@@ -164,6 +167,40 @@ def test_existing_place_contribution_is_not_rejected_as_duplicate() -> None:
         minimum_coverage=0.5,
     )
     assert decision.status == EvidenceStatus.CANDIDATE
+
+
+def test_existing_place_contribution_far_from_target_needs_review() -> None:
+    decision = build_multimodal_decision(
+        model=PreliminaryDecision(
+            status=EvidenceStatus.CANDIDATE,
+            category="playa",
+            confidence=0.95,
+            score=0.90,
+            reason="Imagen turística",
+        ),
+        evidence={
+            "contribution_type": "existing_place",
+            "target_place_id": 42,
+            "target_distance_m": 3500,
+            "gps_accuracy_m": 12,
+            "capture_source": "camera",
+            "captured_at": datetime.now(UTC).isoformat(),
+            "content_hash": "abc",
+            "presence_status": "confirmed",
+        },
+        geospatial={
+            "coherence": {
+                "score": 0.9,
+                "coverage": 1.0,
+                "explanation": "Entorno coherente",
+                "has_contradiction": False,
+            }
+        },
+        duplicate_result={"status": "linked_target"},
+    )
+
+    assert decision.status == EvidenceStatus.NEEDS_REVIEW
+    assert "demasiado lejos" in decision.reason
 
 
 def test_invalid_model_result_is_rejected_even_with_strong_signals() -> None:

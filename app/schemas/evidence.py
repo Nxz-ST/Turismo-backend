@@ -65,3 +65,52 @@ class ProcessResponse(BaseModel):
     job_id: UUID
     status: str
 
+
+class EvidenceProfileAnswers(BaseModel):
+    access_type: Literal[
+        "walking", "vehicle", "public_transport", "mixed", "unknown"
+    ] = "unknown"
+    cost_type: Literal["free", "paid", "unknown"] = "unknown"
+    access_difficulty: Literal["easy", "moderate", "difficult", "unknown"] = (
+        "unknown"
+    )
+    place_state: Literal["open", "restricted", "closed", "unknown"] = "unknown"
+    activities: list[
+        Literal[
+            "photography",
+            "walking",
+            "swimming",
+            "nature",
+            "culture",
+            "adventure",
+            "relaxation",
+        ]
+    ] = Field(default_factory=list, max_length=7)
+    services: list[
+        Literal[
+            "restrooms",
+            "parking",
+            "food",
+            "guide",
+            "signage",
+            "none_observed",
+        ]
+    ] = Field(default_factory=list, max_length=6)
+    risks: list[
+        Literal[
+            "difficult_access",
+            "slippery_surface",
+            "strong_current",
+            "steep_drop",
+            "low_signal",
+            "none_observed",
+        ]
+    ] = Field(default_factory=list, max_length=6)
+
+
+class EvidenceProfileResponse(BaseModel):
+    evidence_id: UUID
+    contribution_type: Literal["new_place", "existing_place"]
+    description: str
+    answers: EvidenceProfileAnswers
+

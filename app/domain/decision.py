@@ -160,6 +160,10 @@ def build_multimodal_decision(
         evidence.get("contribution_type") == "existing_place"
         and evidence.get("target_place_id") is not None
     )
+    target_distance = _optional_float(evidence.get("target_distance_m"))
+    target_location_mismatch = bool(
+        is_existing_place and target_distance is not None and target_distance > 500
+    )
 
     if model.status == EvidenceStatus.REJECTED:
         status = EvidenceStatus.REJECTED
@@ -172,6 +176,12 @@ def build_multimodal_decision(
         outcome = (
             "La confianza visual está por debajo del umbral requerido; "
             "se necesita revisión humana."
+        )
+    elif target_location_mismatch:
+        status = EvidenceStatus.NEEDS_REVIEW
+        outcome = (
+            "La ubicación de la captura está demasiado lejos del lugar existente; "
+            "el aporte no se asociará sin revisión humana."
         )
     elif duplicate_status == "high_match" and not is_existing_place:
         status = EvidenceStatus.DUPLICATE

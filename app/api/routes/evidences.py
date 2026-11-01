@@ -5,7 +5,13 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, SettingsDep
 from app.core.errors import ConfigurationError, ExternalServiceError, ResourceNotFoundError
-from app.schemas.evidence import EvidenceCreate, EvidenceResponse, ProcessResponse
+from app.schemas.evidence import (
+    EvidenceCreate,
+    EvidenceProfileAnswers,
+    EvidenceProfileResponse,
+    EvidenceResponse,
+    ProcessResponse,
+)
 from app.services.supabase import SupabaseRepository
 from app.services.storage import R2StorageService
 from app.services.workflow import ValidationWorkflow
@@ -53,6 +59,89 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     )
     return radius * 2 * math.atan2(math.sqrt(value), math.sqrt(1 - value))
+
+
+_PROFILE_LABELS = {
+    "access_type": {
+        "walking": "a pie",
+        "vehicle": "en vehículo",
+        "public_transport": "en transporte público",
+        "mixed": "mediante acceso mixto",
+    },
+    "cost_type": {"free": "gratuito", "paid": "con ingreso pagado"},
+    "access_difficulty": {
+        "easy": "de dificultad fácil",
+        "moderate": "de dificultad moderada",
+        "difficult": "de acceso difícil",
+    },
+    "place_state": {
+        "open": "se encontró abierto",
+        "restricted": "presentó acceso restringido",
+        "closed": "se encontró cerrado",
+    },
+    "activities": {
+        "photography": "fotografía",
+        "walking": "caminata",
+        "swimming": "baño",
+        "nature": "observación de naturaleza",
+        "culture": "actividades culturales",
+        "adventure": "aventura",
+        "relaxation": "descanso",
+    },
+    "services": {
+        "restrooms": "baños",
+        "parking": "estacionamiento",
+        "food": "alimentación",
+        "guide": "guía",
+        "signage": "señalización",
+    },
+    "risks": {
+        "difficult_access": "acceso complicado",
+        "slippery_surface": "superficie resbaladiza",
+        "strong_current": "corriente fuerte",
+        "steep_drop": "desnivel pronunciado",
+        "low_signal": "baja cobertura móvil",
+    },
+}
+
+
+def _answer_labels(group: str, values: list[str]) -> list[str]:
+    labels = _PROFILE_LABELS[group]
+    return [labels[value] for value in dict.fromkeys(values) if value in labels]
+
+
+def _profile_description(evidence: dict, answers: EvidenceProfileAnswers) -> str:
+    data = answers.model_dump(mode="json")
+    name = str(evidence.get("name") or "Este lugar").strip()
+    parts: list[str] = []
+    access = _PROFILE_LABELS["access_type"].get(data["access_type"])
+    difficulty = _PROFILE_LABELS["access_difficulty"].get(
+        data["access_difficulty"]
+    )
+    cost = _PROFILE_LABELS["cost_type"].get(data["cost_type"])
+    state = _PROFILE_LABELS["place_state"].get(data["place_state"])
+    if access:
+        parts.append(f"El acceso reportado es {access}")
+    if difficulty:
+        parts.append(difficulty)
+    if cost:
+        parts.append(f"el ingreso fue indicado como {cost}")
+    if state:
+        parts.append(state)
+    activities = _answer_labels("activities", data["activities"])
+    services = _answer_labels("services", data["services"])
+    risks = _answer_labels("risks", data["risks"])
+    sentences = [f"Información comunitaria verificada para {name}."]
+    if parts:
+        sentences.append("; ".join(parts).capitalize() + ".")
+    if activities:
+        sentences.append(f"Actividades observadas: {', '.join(activities)}.")
+    if services:
+        sentences.append(f"Servicios observados: {', '.join(services)}.")
+    if risks:
+        sentences.append(f"Precauciones reportadas: {', '.join(risks)}.")
+    sentences.append("Datos aportados por la comunidad y sujetos a confirmación.")
+    return " ".join(sentences)
 
 
 @router.post("", response_model=EvidenceResponse, status_code=status.HTTP_201_CREATED)
@@ -202,6 +291,57 @@ async def get_evidence(
         row["validation_details"] = results.get(str(evidence_id), {})
         row["processing_events"] = events.get(str(evidence_id), [])
         return _with_photo_url(row, R2StorageService(settings))
+    except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
+        raise _handle_service_error(exc) from exc
+
+
+@router.post(
+    "/{evidence_id}/profile",
+    response_model=EvidenceProfileResponse,
+)
+async def complete_evidence_profile(
+    evidence_id: UUID,
+    payload: EvidenceProfileAnswers,
+    user: CurrentUser,
+    settings: SettingsDep,
+) -> dict:
+    repository = SupabaseRepository(settings)
+    try:
+        evidence = await repository.get_evidence(evidence_id, user.id)
+        if evidence.get("status") not in {"candidate", "validated"}:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "El cuestionario estará disponible cuando la evidencia "
+                    "supere la validación automática."
+                ),
+            )
+        answers = payload.model_dump(mode="json")
+        description = _profile_description(evidence, payload)
+        await repository.update_evidence(
+            evidence_id,
+            {"description": description},
+        )
+        await repository.save_processing_event(
+            evidence_id=evidence_id,
+            stage="community_profile",
+            status="completed",
+            title="Información comunitaria completada",
+            detail="El usuario respondió el cuestionario estructurado del lugar.",
+            metadata={
+                "contribution_type": evidence.get("contribution_type"),
+                "answers": answers,
+                "generated_description": description,
+            },
+        )
+        return {
+            "evidence_id": evidence_id,
+            "contribution_type": evidence.get("contribution_type") or "new_place",
+            "description": description,
+            "answers": answers,
+        }
+    except HTTPException:
+        raise
     except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
         raise _handle_service_error(exc) from exc
 
