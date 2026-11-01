@@ -385,6 +385,7 @@ class ValidationWorkflow:
             "id": row.get("id"),
             "name": name,
             "source": source,
+            "status": row.get("estado_validacion") or row.get("status"),
             "distance_m": round(distance, 1),
             "name_similarity": round(similarity, 3),
             "category_match": category_match,

@@ -64,6 +64,35 @@ def _score_coordinate_candidate(place: dict, candidate: dict) -> float:
     return round(min(0.85, name_score * 0.7 + context_score * 0.15), 3)
 
 
+def _community_duplicate_candidates(result: dict) -> list[dict]:
+    duplicate = result.get("duplicate_result") or {}
+    if duplicate.get("status") != "high_match":
+        return []
+    matches = [
+        candidate
+        for candidate in duplicate.get("candidates") or []
+        if candidate.get("source") == "community" and candidate.get("high_match")
+    ]
+    return sorted(
+        matches,
+        key=lambda candidate: float(candidate.get("distance_m") or 999_999),
+    )
+
+
+async def _validated_community_duplicate(
+    repository: SupabaseRepository,
+    result: dict,
+) -> tuple[dict, dict] | None:
+    for match in _community_duplicate_candidates(result):
+        try:
+            canonical = await repository.get_evidence(UUID(str(match.get("id"))))
+        except (ValueError, ResourceNotFoundError):
+            continue
+        if canonical.get("status") in {"candidate", "validated"}:
+            return canonical, match
+    return None
+
+
 @router.get("/reviews")
 async def review_queue(
     _: AdminUser,
@@ -137,6 +166,44 @@ async def decide_review(
                 status_code=422,
                 detail="Selecciona una categoria antes de validar",
             )
+        if payload.status == "validated":
+            latest = await repository.latest_results_for([str(evidence_id)])
+            duplicate = await _validated_community_duplicate(
+                repository,
+                latest.get(str(evidence_id)) or {},
+            )
+            if duplicate is not None:
+                canonical, match = duplicate
+                canonical_id = str(canonical["id"])
+                canonical_name = str(
+                    canonical.get("name") or "el descubrimiento comunitario existente"
+                )
+                reason = (
+                    f"Aporte consolidado con {canonical_name}. RutaAmiga detectó "
+                    f"la misma categoría a {float(match.get('distance_m') or 0):.0f} m; "
+                    "no se creó una segunda ficha pública."
+                )
+                await repository.update_evidence(
+                    evidence_id,
+                    {
+                        "target_place_snapshot": {
+                            "community_evidence_id": canonical_id,
+                            "nombre": canonical_name,
+                            "categoria": canonical.get("predicted_category"),
+                            "latitud": canonical.get("latitude"),
+                            "longitud": canonical.get("longitude"),
+                            "distance_m": match.get("distance_m"),
+                            "linked_automatically": True,
+                        }
+                    },
+                )
+                return await repository.save_manual_review(
+                    evidence_id=evidence_id,
+                    reviewer_id=admin.id,
+                    status="duplicate",
+                    category=category,
+                    reason=reason,
+                )
         return await repository.save_manual_review(
             evidence_id=evidence_id,
             reviewer_id=admin.id,
