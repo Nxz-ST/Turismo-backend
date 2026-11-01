@@ -134,9 +134,12 @@ def _official(row: dict) -> dict:
 def _community(row: dict) -> dict:
     category = str(row.get("categoria_ia") or "Por determinar")
     raw_description = str(row.get("descripcion") or "").strip()
+    generated_profile = raw_description.startswith(
+        "Información comunitaria verificada para "
+    )
     description = (
         raw_description
-        if len(raw_description) >= 20
+        if generated_profile
         else (
             f"Descubrimiento de la comunidad validado como {category}. "
             "La información detallada todavía está en verificación."

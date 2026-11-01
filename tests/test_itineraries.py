@@ -196,6 +196,23 @@ def test_short_community_description_gets_honest_fallback() -> None:
     assert place["photo_url"] == "https://example.test/photo.jpg"
 
 
+def test_community_free_text_is_not_used_as_public_route_copy() -> None:
+    place = _community(
+        {
+            "id": "community-id",
+            "nombre": "Laguna de prueba",
+            "descripcion": "Texto libre suficientemente largo pero no verificado.",
+            "latitud": -11.98,
+            "longitud": -76.83,
+            "categoria_ia": "lago",
+            "estado_validacion": "validated",
+        }
+    )
+
+    assert "Texto libre" not in place["description"]
+    assert "información detallada" in place["description"]
+
+
 def test_validated_community_place_can_be_a_direct_destination() -> None:
     stop = _community(
         {

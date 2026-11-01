@@ -31,7 +31,10 @@ def _with_photo_url(row: dict, storage: R2StorageService) -> dict:
 def _with_public_community_description(row: dict) -> dict:
     result = dict(row)
     description = str(result.get("descripcion") or "").strip()
-    if len(description) < 20:
+    generated_profile = description.startswith(
+        "Información comunitaria verificada para "
+    )
+    if not generated_profile:
         category = str(result.get("categoria_ia") or "atractivo turístico")
         result["descripcion"] = (
             f"Descubrimiento de la comunidad validado como {category}. "
