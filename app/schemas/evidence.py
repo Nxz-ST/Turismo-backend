@@ -22,6 +22,7 @@ class EvidenceCreate(BaseModel):
     presence_sample_id: UUID | None = None
     contribution_type: Literal["new_place", "existing_place"] = "new_place"
     target_place_id: int | None = Field(default=None, ge=1)
+    target_community_place_id: UUID | None = None
 
 
 class EvidenceResponse(BaseModel):
@@ -49,6 +50,8 @@ class EvidenceResponse(BaseModel):
     presence_attestation: dict = Field(default_factory=dict)
     contribution_type: Literal["new_place", "existing_place"] = "new_place"
     target_place_id: int | None = None
+    target_community_place_id: UUID | None = None
+    community_place_id: UUID | None = None
     target_place_snapshot: dict = Field(default_factory=dict)
     target_distance_m: float | None = None
     decision_reason: str | None = None

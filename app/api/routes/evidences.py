@@ -160,24 +160,42 @@ async def create_evidence(
         repository = SupabaseRepository(settings)
         data = payload.model_dump(mode="json")
         if payload.contribution_type == "existing_place":
-            if payload.target_place_id is None:
+            if (payload.target_place_id is None) == (
+                payload.target_community_place_id is None
+            ):
                 raise HTTPException(
                     status_code=422,
-                    detail="Selecciona el lugar existente al que pertenece la evidencia",
+                    detail=(
+                        "Selecciona un único lugar oficial o comunitario al que "
+                        "pertenece la evidencia"
+                    ),
                 )
-            place = await repository.get_tourist_place(payload.target_place_id)
-            place_latitude = float(place["latitud"])
-            place_longitude = float(place["longitud"])
+            if payload.target_community_place_id is not None:
+                place = await repository.get_community_place(
+                    payload.target_community_place_id
+                )
+                data["community_place_id"] = str(payload.target_community_place_id)
+                snapshot_category = place.get("category")
+            else:
+                place = await repository.get_tourist_place(payload.target_place_id)
+                snapshot_category = place.get("categoria_texto")
+            place_latitude = float(place.get("latitud") or place["latitude"])
+            place_longitude = float(place.get("longitud") or place["longitude"])
             data["target_place_snapshot"] = {
                 "id": place.get("id"),
                 "codigo": place.get("codigo"),
-                "nombre": place.get("nombre"),
-                "categoria": place.get("categoria_texto"),
+                "nombre": place.get("nombre") or place.get("name"),
+                "categoria": snapshot_category,
                 "departamento": place.get("departamento"),
                 "provincia": place.get("provincia"),
                 "distrito": place.get("distrito"),
                 "latitud": place_latitude,
                 "longitud": place_longitude,
+                "source": (
+                    "community"
+                    if payload.target_community_place_id is not None
+                    else "official"
+                ),
             }
             data["target_distance_m"] = round(
                 _distance_m(
@@ -188,7 +206,10 @@ async def create_evidence(
                 ),
                 1,
             )
-        elif payload.target_place_id is not None:
+        elif (
+            payload.target_place_id is not None
+            or payload.target_community_place_id is not None
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="Un descubrimiento nuevo no debe incluir un lugar existente",

@@ -74,6 +74,129 @@ class SupabaseRepository:
             raise ResourceNotFoundError("El lugar turístico seleccionado no existe")
         return rows[0]
 
+    async def get_community_place(self, place_id: UUID | str) -> dict[str, Any]:
+        response = await self._request(
+            "GET",
+            "community_places",
+            params={"id": f"eq.{place_id}", "limit": "1"},
+        )
+        rows = response.json()
+        if not rows:
+            raise ResourceNotFoundError("El lugar comunitario seleccionado no existe")
+        return rows[0]
+
+    async def promote_community_place(self, evidence: dict[str, Any]) -> dict[str, Any]:
+        category = evidence.get("predicted_category")
+        if not category:
+            raise ResourceNotFoundError("La evidencia no tiene una categoría validada")
+        payload = {
+            "id": str(evidence["id"]),
+            "origin_evidence_id": str(evidence["id"]),
+            "name": evidence["name"],
+            "description": evidence.get("description") or "",
+            "category": category,
+            "latitude": evidence["latitude"],
+            "longitude": evidence["longitude"],
+            "altitude": evidence.get("altitude"),
+            "primary_photo_object_key": evidence.get("object_key"),
+            "publication_status": "published",
+        }
+        response = await self._request(
+            "POST",
+            "community_places",
+            params={"on_conflict": "origin_evidence_id"},
+            headers={
+                **self._headers,
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            },
+            json=payload,
+        )
+        place = response.json()[0]
+        await self.update_evidence(
+            UUID(str(evidence["id"])),
+            {"community_place_id": str(place["id"])},
+        )
+        return place
+
+    async def link_evidence_to_community_place(
+        self, evidence_id: UUID, community_place_id: UUID | str
+    ) -> dict[str, Any]:
+        return await self.update_evidence(
+            evidence_id,
+            {
+                "contribution_type": "existing_place",
+                "target_place_id": None,
+                "community_place_id": str(community_place_id),
+                "target_community_place_id": str(community_place_id),
+            },
+        )
+
+    async def trust_passport_inputs(
+        self, *, source: str, place_id: str
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        visits_response = await self._request(
+            "GET",
+            "route_visits",
+            params={
+                "place_source": f"eq.{source}",
+                "place_id": (
+                    f"in.({place_id},community-{place_id})"
+                    if source == "community"
+                    else f"eq.{place_id}"
+                ),
+                "visit_verified": "eq.true",
+                "select": (
+                    "user_id,visit_verified,captured_at,place_condition,"
+                    "access_condition"
+                ),
+                "limit": "2000",
+            },
+        )
+        if source == "official":
+            evidence_params = {
+                "target_place_id": f"eq.{place_id}",
+                "status": "eq.validated",
+            }
+        else:
+            evidence_params = {
+                "or": (
+                    f"(community_place_id.eq.{place_id},"
+                    f"target_community_place_id.eq.{place_id})"
+                ),
+                "status": "in.(validated,duplicate)",
+            }
+        evidences_response = await self._request(
+            "GET",
+            "evidences",
+            params={
+                **evidence_params,
+                "select": "user_id,status,updated_at",
+                "limit": "2000",
+            },
+        )
+        return visits_response.json(), evidences_response.json()
+
+    async def community_place_evidences(
+        self, place_id: UUID | str, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "evidences",
+            params={
+                "or": (
+                    f"(community_place_id.eq.{place_id},"
+                    f"target_community_place_id.eq.{place_id})"
+                ),
+                "status": "in.(validated,duplicate)",
+                "select": (
+                    "id,description,object_key,predicted_category,status,updated_at"
+                ),
+                "order": "updated_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return response.json()
+
     async def create_route_visit(
         self, *, user_id: UUID, data: dict[str, Any]
     ) -> dict[str, Any]:
@@ -754,12 +877,26 @@ class SupabaseRepository:
         )
         return [*legacy.json(), *current.json()]
 
+    async def nearby_canonical_community_places(
+        self, latitude: float, longitude: float, radius: float
+    ) -> list[dict[str, Any]]:
+        response = await self._request(
+            "POST",
+            "rpc/obtener_lugares_comunitarios_cercanos",
+            json={
+                "lat_usuario": latitude,
+                "lng_usuario": longitude,
+                "radio_metros": radius,
+            },
+        )
+        return response.json()
+
     async def nearby_community_places(
         self, latitude: float, longitude: float, radius: float
     ) -> list[dict[str, Any]]:
         response = await self._request(
             "POST",
-            "rpc/obtener_evidencias_cercanas",
+            "rpc/obtener_lugares_comunitarios_cercanos",
             json={
                 "lat_usuario": latitude,
                 "lng_usuario": longitude,

@@ -18,6 +18,10 @@ Maps Platform y el Motor de IA existente.
 - Usa Sentinel-2 y DEM como señales complementarias, nunca como rechazo automático.
 - Registra muestras GPS espaciadas y genera una prueba de presencia con ventana móvil de 24 horas.
 - Sincroniza por usuario favoritos, rutas personales y reseñas, conservando una copia local para uso sin conexión.
+- Promueve descubrimientos aprobados a fichas comunitarias canónicas y consolida
+  nuevas evidencias sin duplicar puntos en el mapa.
+- Expone un Pasaporte de confianza basado en aportantes únicos y visitas GPS
+  verificadas, separado de la condición oficial MINCETUR.
 
 ## Ejecución local
 
@@ -35,9 +39,10 @@ La documentación interactiva queda en `http://127.0.0.1:8001/docs`. Se usa
 el puerto 8001 para evitar conflictos con otros servicios locales y coincidir
 con la configuración de desarrollo de Flutter.
 
-Primero ejecuta los scripts `sql/001_*.sql` a `sql/011_*.sql`, en orden, en el
-SQL Editor de Supabase. El último crea la auditoría no destructiva de
-coordenadas y puntos de acceso. Completa `.env` después. La
+Primero ejecuta los scripts `sql/001_*.sql` a `sql/012_*.sql`, en orden, en el
+SQL Editor de Supabase. Los últimos crean la auditoría no destructiva de
+coordenadas, los puntos de acceso y las fichas comunitarias canónicas. Completa
+`.env` después. La
 `SUPABASE_SERVICE_ROLE_KEY` nunca debe
 incluirse en Flutter, Git ni un bundle móvil.
 
@@ -113,6 +118,22 @@ trabaja primero con la copia local y reintenta la sincronización cuando vuelve
 la conexión; los datos siempre quedan aislados por el usuario autenticado.
 La migración `010` permite guardar varias rutas personales y agrega reportes
 recientes de condición/acceso únicamente a visitas comprobadas por GPS.
+
+## Lugares comunitarios y confianza
+
+La migración `012_community_places_trust_passport.sql` recupera los
+descubrimientos validados anteriores y crea una ficha canónica por lugar. Un
+aporte posterior puede elegir esa ficha como lugar existente; si el panel
+consolida un duplicado de la misma categoría, también queda vinculado a ella.
+
+- `GET /api/v1/places/community/nearby`: fichas comunitarias publicadas.
+- `GET /api/v1/places/community/{id}`: detalle y Pasaporte de confianza.
+- `GET /api/v1/places/{source}/{id}/trust`: respaldo de un lugar oficial o
+  comunitario.
+
+Las métricas cuentan personas únicas, no envíos. La corroboración comunitaria
+no declara por sí sola que el lugar sea un recurso turístico oficial ni que su
+acceso sea público.
 
 ## Calidad de coordenadas
 

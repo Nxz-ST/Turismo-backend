@@ -186,7 +186,8 @@ async def decide_review(
             )
             if duplicate is not None:
                 canonical, match = duplicate
-                canonical_id = str(canonical["id"])
+                community_place = await repository.promote_community_place(canonical)
+                canonical_id = str(community_place["id"])
                 canonical_name = str(
                     canonical.get("name") or "el descubrimiento comunitario existente"
                 )
@@ -209,6 +210,10 @@ async def decide_review(
                         }
                     },
                 )
+                await repository.link_evidence_to_community_place(
+                    evidence_id,
+                    canonical_id,
+                )
                 return await repository.save_manual_review(
                     evidence_id=evidence_id,
                     reviewer_id=admin.id,
@@ -216,13 +221,23 @@ async def decide_review(
                     category=category,
                     reason=reason,
                 )
-        return await repository.save_manual_review(
+        reviewed = await repository.save_manual_review(
             evidence_id=evidence_id,
             reviewer_id=admin.id,
             status=payload.status,
             category=category,
             reason=payload.reason,
         )
+        if payload.status == "validated":
+            refreshed = await repository.get_evidence(evidence_id)
+            if refreshed.get("contribution_type") == "new_place":
+                await repository.promote_community_place(refreshed)
+            elif refreshed.get("target_community_place_id"):
+                await repository.link_evidence_to_community_place(
+                    evidence_id,
+                    refreshed["target_community_place_id"],
+                )
+        return reviewed
     except HTTPException:
         raise
     except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
