@@ -17,6 +17,19 @@ from app.services.supabase import SupabaseRepository
 router = APIRouter()
 
 
+def _latest_community_profile(events: list[dict]) -> tuple[dict, str | None] | None:
+    for event in reversed(events):
+        metadata = event.get("metadata") or {}
+        is_profile = (
+            event.get("stage") == "community_profile"
+            or metadata.get("event_type") == "community_profile"
+        )
+        answers = metadata.get("answers")
+        if is_profile and isinstance(answers, dict):
+            return answers, event.get("created_at")
+    return None
+
+
 async def _trust_passport(
     repository: SupabaseRepository,
     *,
@@ -146,6 +159,9 @@ async def community_place_detail(
         row = await repository.get_community_place(place_id)
         public = _community_public_row(row, R2StorageService(settings))
         evidence_rows = await repository.community_place_evidences(place_id)
+        events_by_evidence = await repository.processing_events_for(
+            [str(evidence["id"]) for evidence in evidence_rows]
+        )
         storage = R2StorageService(settings)
         photos: list[str] = []
         updates: list[dict] = []
@@ -157,10 +173,16 @@ async def community_place_detail(
                     photos.append(url)
             description = str(evidence.get("description") or "").strip()
             if description.startswith("Información comunitaria verificada para "):
+                profile = _latest_community_profile(
+                    events_by_evidence.get(str(evidence["id"]), [])
+                )
                 updates.append(
                     {
                         "description": description,
-                        "reported_at": evidence.get("updated_at"),
+                        "reported_at": (
+                            profile[1] if profile else evidence.get("updated_at")
+                        ),
+                        "answers": profile[0] if profile else None,
                     }
                 )
         public["photos"] = photos
