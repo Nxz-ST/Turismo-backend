@@ -32,3 +32,19 @@ def test_hides_internal_processing_event_detail() -> None:
 
     assert "Supabase" not in sanitized["decision_reason"]
     assert "PostgREST" not in sanitized["processing_events"][0]["detail"]
+
+
+def test_exposes_compatible_profile_event_with_public_stage() -> None:
+    evidence = {
+        "processing_events": [
+            {
+                "stage": "human_review",
+                "detail": "Cuestionario guardado.",
+                "metadata": {"event_type": "community_profile"},
+            }
+        ]
+    }
+
+    sanitized = sanitize_evidence_for_public(evidence)
+
+    assert sanitized["processing_events"][0]["stage"] == "community_profile"

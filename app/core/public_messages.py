@@ -44,6 +44,9 @@ def sanitize_evidence_for_public(row: dict[str, Any]) -> dict[str, Any]:
     events = []
     for raw_event in result.get("processing_events") or []:
         event = dict(raw_event)
+        metadata = event.get("metadata") or {}
+        if metadata.get("event_type") == "community_profile":
+            event["stage"] = "community_profile"
         if contains_internal_detail(event.get("detail")):
             event["detail"] = public_processing_failure()
         events.append(event)

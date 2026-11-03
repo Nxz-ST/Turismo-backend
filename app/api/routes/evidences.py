@@ -356,11 +356,14 @@ async def complete_evidence_profile(
         )
         await repository.save_processing_event(
             evidence_id=evidence_id,
-            stage="community_profile",
+            # Se almacena con una etapa admitida por instalaciones anteriores.
+            # La API la presenta como community_profile mediante event_type.
+            stage="human_review",
             status="completed",
             title="Información comunitaria completada",
             detail="El usuario respondió el cuestionario estructurado del lugar.",
             metadata={
+                "event_type": "community_profile",
                 "contribution_type": evidence.get("contribution_type"),
                 "answers": answers,
                 "generated_description": description,
