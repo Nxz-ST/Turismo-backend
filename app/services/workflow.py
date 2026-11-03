@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.core.config import Settings
 from app.core.errors import ConfigurationError, ExternalServiceError
+from app.core.public_messages import public_processing_failure
 from app.domain.decision import (
     EvidenceStatus,
     build_multimodal_decision,
@@ -34,6 +35,16 @@ def _automatic_official_match(
     if not matches:
         return None
     return min(matches, key=lambda item: float(item.get("distance_m") or 999_999))
+
+
+def _persisted_duplicate_status(value: object) -> str:
+    """Keep compatibility with databases that have the pre-013 constraint."""
+    status = str(value or "not_evaluated")
+    if status in {"category_conflict", "linked_target"}:
+        return "high_match"
+    if status in {"not_evaluated", "no_match", "nearby_match", "high_match"}:
+        return status
+    return "not_evaluated"
 
 
 class ValidationWorkflow:
@@ -124,6 +135,7 @@ class ValidationWorkflow:
                         {
                             "contribution_type": "existing_place",
                             "target_place_id": int(place["id"]),
+                            "target_community_place_id": None,
                             "target_place_snapshot": {
                                 "id": place.get("id"),
                                 "codigo": place.get("codigo"),
@@ -148,12 +160,17 @@ class ValidationWorkflow:
                         "RutaAmiga reconoció un atractivo oficial cercano y "
                         "guardó la evidencia como un aporte adicional."
                     )
-                if (
-                    evidence.get("contribution_type") == "existing_place"
-                    and evidence.get("target_place_id") is not None
+                if evidence.get("contribution_type") == "existing_place" and (
+                    evidence.get("target_place_id") is not None
+                    or evidence.get("target_community_place_id") is not None
                 ):
                     duplicate_result["status"] = "linked_target"
-                    duplicate_result["target_place_id"] = evidence["target_place_id"]
+                    duplicate_result["target_place_id"] = evidence.get(
+                        "target_place_id"
+                    )
+                    duplicate_result["target_community_place_id"] = evidence.get(
+                        "target_community_place_id"
+                    )
                     duplicate_result["target_distance_m"] = evidence.get(
                         "target_distance_m"
                     )
@@ -254,7 +271,9 @@ class ValidationWorkflow:
                     "confidence": decision_data["confidence"],
                     "score": decision_data["score"],
                     "evidence_coverage": decision_data["coverage"],
-                    "duplicate_status": decision_data["duplicate_status"],
+                    "duplicate_status": _persisted_duplicate_status(
+                        decision_data["duplicate_status"]
+                    ),
                     "decision_reason": decision_data["reason"],
                 },
             )
@@ -276,19 +295,23 @@ class ValidationWorkflow:
                 {"status": "completed", "completed_at": datetime.now(UTC).isoformat()},
             )
         except Exception as exc:
+            public_reason = public_processing_failure()
             try:
                 await self._repository.save_processing_event(
                     evidence_id=evidence_id,
                     stage="decision",
                     status="failed",
                     title="No se pudo completar el procesamiento",
-                    detail=str(exc)[:500],
+                    detail=public_reason,
                 )
             except Exception:
                 pass
             await self._repository.update_evidence(
                 evidence_id,
-                {"status": EvidenceStatus.FAILED.value, "decision_reason": str(exc)[:500]},
+                {
+                    "status": EvidenceStatus.FAILED.value,
+                    "decision_reason": public_reason,
+                },
             )
             await self._repository.update_job(
                 job_id,

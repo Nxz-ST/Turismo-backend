@@ -158,7 +158,10 @@ def build_multimodal_decision(
     contradiction = bool(coherence.get("has_contradiction"))
     is_existing_place = (
         evidence.get("contribution_type") == "existing_place"
-        and evidence.get("target_place_id") is not None
+        and (
+            evidence.get("target_place_id") is not None
+            or evidence.get("target_community_place_id") is not None
+        )
     )
     target_distance = _optional_float(evidence.get("target_distance_m"))
     target_location_mismatch = bool(

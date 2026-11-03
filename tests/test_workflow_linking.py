@@ -1,6 +1,16 @@
 import pytest
 
-from app.services.workflow import ValidationWorkflow, _automatic_official_match
+from app.services.workflow import (
+    ValidationWorkflow,
+    _automatic_official_match,
+    _persisted_duplicate_status,
+)
+
+
+def test_new_duplicate_states_remain_compatible_with_legacy_constraint() -> None:
+    assert _persisted_duplicate_status("category_conflict") == "high_match"
+    assert _persisted_duplicate_status("linked_target") == "high_match"
+    assert _persisted_duplicate_status("no_match") == "no_match"
 
 
 def test_new_contribution_uses_nearest_strong_official_match() -> None:

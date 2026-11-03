@@ -169,6 +169,37 @@ def test_existing_place_contribution_is_not_rejected_as_duplicate() -> None:
     assert decision.status == EvidenceStatus.CANDIDATE
 
 
+def test_existing_community_place_contribution_is_not_duplicate() -> None:
+    model = decide_from_existing_model(
+        {
+            "estado": "POSIBLE_NUEVO_ATRACTIVO",
+            "clasificacion_modelo": "lago",
+            "confianza_modelo": 90,
+        }
+    )
+    decision = build_multimodal_decision(
+        model=model,
+        evidence={
+            "latitude": -10.0,
+            "longitude": -78.1,
+            "contribution_type": "existing_place",
+            "target_community_place_id": "place-id",
+        },
+        geospatial={
+            "coherence": {
+                "score": 0.9,
+                "coverage": 1.0,
+                "has_contradiction": False,
+            }
+        },
+        duplicate_result={"status": "high_match"},
+        candidate_threshold=0.5,
+        minimum_coverage=0.5,
+    )
+
+    assert decision.status == EvidenceStatus.CANDIDATE
+
+
 def test_existing_place_contribution_far_from_target_needs_review() -> None:
     decision = build_multimodal_decision(
         model=PreliminaryDecision(

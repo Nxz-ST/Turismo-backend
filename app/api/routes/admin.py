@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import AdminUser, SettingsDep
 from app.core.errors import ConfigurationError, ExternalServiceError, ResourceNotFoundError
+from app.core.public_messages import sanitize_evidence_for_public
 from app.schemas.coordinate import CoordinateReviewDecision
 from app.schemas.review import ReviewDecision, ReviewResponse
 from app.services.google_maps import GoogleMapsService
@@ -22,7 +23,10 @@ def _service_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
-    return HTTPException(status_code=502, detail=str(exc))
+    return HTTPException(
+        status_code=502,
+        detail="El servicio no está disponible por el momento. Inténtalo nuevamente.",
+    )
 
 
 def _plain(value: object) -> str:
@@ -117,7 +121,7 @@ async def review_queue(
             row["processing_events"] = events.get(str(row["id"]), [])
             if row.get("object_key"):
                 row["photo_url"] = storage.create_download_url(row["object_key"], expires_in=900)
-        return rows
+        return [sanitize_evidence_for_public(row) for row in rows]
     except (ConfigurationError, ExternalServiceError) as exc:
         raise _service_error(exc) from exc
 
@@ -145,7 +149,7 @@ async def review_detail(
             row["photo_url"] = R2StorageService(settings).create_download_url(
                 row["object_key"], expires_in=900
             )
-        return row
+        return sanitize_evidence_for_public(row)
     except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
         raise _service_error(exc) from exc
 

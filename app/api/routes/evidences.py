@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, SettingsDep
 from app.core.errors import ConfigurationError, ExternalServiceError, ResourceNotFoundError
+from app.core.public_messages import sanitize_evidence_for_public
 from app.schemas.evidence import (
     EvidenceCreate,
     EvidenceProfileAnswers,
@@ -49,7 +50,10 @@ def _handle_service_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
-    return HTTPException(status_code=502, detail=str(exc))
+    return HTTPException(
+        status_code=502,
+        detail="El servicio no está disponible por el momento. Inténtalo nuevamente.",
+    )
 
 
 def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -263,7 +267,9 @@ async def list_evidences(
             row["geospatial_result"] = result.get("geospatial_result") or {}
             row["validation_details"] = result
             row["processing_events"] = events.get(str(row["id"]), [])
-            enriched.append(_with_photo_url(row, storage))
+            enriched.append(
+                sanitize_evidence_for_public(_with_photo_url(row, storage))
+            )
         return enriched
     except (ConfigurationError, ExternalServiceError) as exc:
         raise _handle_service_error(exc) from exc
@@ -314,7 +320,9 @@ async def get_evidence(
         )
         row["validation_details"] = results.get(str(evidence_id), {})
         row["processing_events"] = events.get(str(evidence_id), [])
-        return _with_photo_url(row, R2StorageService(settings))
+        return sanitize_evidence_for_public(
+            _with_photo_url(row, R2StorageService(settings))
+        )
     except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
         raise _handle_service_error(exc) from exc
 
