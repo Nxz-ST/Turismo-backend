@@ -34,7 +34,12 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        response.headers["Cache-Control"] = "no-store"
+        # Las respuestas de datos sensibles no deben persistirse. Algunas rutas
+        # de medios establecen una politica de cache explicita para evitar
+        # descargar la misma fotografia de Google en cada reconstruccion del
+        # cliente; respetamos esa politica cuando ya fue definida.
+        if "Cache-Control" not in response.headers:
+            response.headers["Cache-Control"] = "no-store"
         return response
 
 app = FastAPI(
