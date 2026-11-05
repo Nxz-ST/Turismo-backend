@@ -97,6 +97,66 @@ async def _validated_community_duplicate(
     return None
 
 
+async def _fresh_validated_community_duplicate(
+    repository: SupabaseRepository,
+    evidence: dict,
+    category: str,
+) -> tuple[dict, dict] | None:
+    """Revalida duplicados al aprobar para cerrar carreras de procesamiento.
+
+    Un lugar puede publicarse después de que otra evidencia cercana terminó su
+    análisis. Por eso el resultado calculado al inicio no siempre contiene al
+    lugar canónico que ya existe cuando el revisor toma la decisión.
+    """
+    nearby = await repository.nearby_community_places(
+        float(evidence["latitude"]),
+        float(evidence["longitude"]),
+        150,
+    )
+    matches: list[tuple[dict, dict]] = []
+    for place in nearby:
+        if str(place.get("id")) == str(evidence.get("id")):
+            continue
+        if (place.get("estado_validacion") or place.get("status")) != "validated":
+            continue
+        place_category = str(
+            place.get("categoria_ia")
+            or place.get("categoria")
+            or place.get("category")
+            or ""
+        ).lower()
+        if place_category != str(category).lower():
+            continue
+        try:
+            distance = _distance_m(
+                float(evidence["latitude"]),
+                float(evidence["longitude"]),
+                float(place.get("latitud") or place.get("latitude")),
+                float(place.get("longitud") or place.get("longitude")),
+            )
+        except (TypeError, ValueError):
+            continue
+        similarity = SequenceMatcher(
+            None,
+            _plain(evidence.get("name")),
+            _plain(place.get("nombre") or place.get("name")),
+        ).ratio()
+        # A menos de 25 m la categoría basta. Entre 25 y 75 m también se exige
+        # una coincidencia fuerte de nombre para no fusionar atractivos vecinos.
+        if not (distance <= 25 or (distance <= 75 and similarity >= 0.75)):
+            continue
+        matches.append(
+            (
+                place,
+                {
+                    "distance_m": round(distance, 1),
+                    "name_similarity": round(similarity, 3),
+                },
+            )
+        )
+    return min(matches, key=lambda item: item[1]["distance_m"]) if matches else None
+
+
 @router.get("/reviews")
 async def review_queue(
     _: AdminUser,
@@ -211,6 +271,52 @@ async def decide_review(
                             "longitud": canonical.get("longitude"),
                             "distance_m": match.get("distance_m"),
                             "linked_automatically": True,
+                        }
+                    },
+                )
+                await repository.link_evidence_to_community_place(
+                    evidence_id,
+                    canonical_id,
+                )
+                return await repository.save_manual_review(
+                    evidence_id=evidence_id,
+                    reviewer_id=admin.id,
+                    status="duplicate",
+                    category=category,
+                    reason=reason,
+                )
+            fresh_duplicate = await _fresh_validated_community_duplicate(
+                repository,
+                evidence,
+                str(category),
+            )
+            if fresh_duplicate is not None:
+                canonical, match = fresh_duplicate
+                canonical_id = str(canonical["id"])
+                canonical_name = str(
+                    canonical.get("nombre")
+                    or canonical.get("name")
+                    or "el descubrimiento comunitario existente"
+                )
+                reason = (
+                    f"Aporte consolidado con {canonical_name}. Al momento de "
+                    f"aprobar ya existía una ficha de la misma categoría a "
+                    f"{float(match['distance_m']):.0f} m; no se creó un duplicado."
+                )
+                await repository.update_evidence(
+                    evidence_id,
+                    {
+                        "target_place_snapshot": {
+                            "community_evidence_id": canonical_id,
+                            "nombre": canonical_name,
+                            "categoria": category,
+                            "latitud": canonical.get("latitud")
+                            or canonical.get("latitude"),
+                            "longitud": canonical.get("longitud")
+                            or canonical.get("longitude"),
+                            "distance_m": match["distance_m"],
+                            "linked_automatically": True,
+                            "rechecked_at_review": True,
                         }
                     },
                 )
