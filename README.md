@@ -97,7 +97,10 @@ Los usuarios con `app_metadata.role=admin` pueden consumir:
 
 - `GET /api/v1/admin/reviews`: candidatos y casos dudosos pendientes.
 - `GET /api/v1/admin/reviews/{id}`: evidencia completa y fotografía firmada.
+- `GET /api/v1/admin/reviews/{id}/dossier`: expediente institucional imprimible.
 - `PATCH /api/v1/admin/reviews/{id}`: validar o rechazar con categoría y motivo.
+- `GET /api/v1/admin/pilot/metrics`: indicadores consolidados del piloto.
+- `PATCH /api/v1/admin/place-reports/{id}`: revisar una alerta ciudadana.
 
 Cada decisión se agrega a `validation_results` con fuente `manual_review`; no
 se sobrescribe el historial emitido por el modelo.
@@ -118,6 +121,11 @@ trabaja primero con la copia local y reintenta la sincronización cuando vuelve
 la conexión; los datos siempre quedan aislados por el usuario autenticado.
 La migración `010` permite guardar varias rutas personales y agrega reportes
 recientes de condición/acceso únicamente a visitas comprobadas por GPS.
+
+La migración `015_place_issue_reports.sql` incorpora reportes estructurados de
+accesos cerrados, riesgos, ubicaciones incorrectas e información desactualizada.
+Los reportes entran a revisión administrativa y nunca cambian una ficha de
+manera automática.
 
 ## Lugares comunitarios y confianza
 

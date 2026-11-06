@@ -24,3 +24,8 @@ class ReviewResponse(BaseModel):
     status: str
     predicted_category: str | None = None
     decision_reason: str | None = None
+
+
+class PlaceIssueReportDecision(BaseModel):
+    status: Literal["reviewed", "resolved", "dismissed"]
+    note: str = Field(min_length=3, max_length=500)

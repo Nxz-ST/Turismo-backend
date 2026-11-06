@@ -9,12 +9,55 @@ from app.api.deps import CurrentUser, SettingsDep
 from app.core.errors import ConfigurationError, ExternalServiceError
 from app.core.errors import ResourceNotFoundError
 from app.domain.trust import build_trust_passport
-from app.schemas.place import CommunityPlaceResponse, TrustPassportResponse
+from app.schemas.place import (
+    CommunityPlaceResponse,
+    PlaceIssueReportCreate,
+    TrustPassportResponse,
+)
 from app.services.storage import R2StorageService
 from app.services.supabase import SupabaseRepository
 
 
 router = APIRouter()
+
+
+@router.post("/{source}/{place_id}/reports", status_code=201)
+async def create_place_issue_report(
+    source: Literal["official", "community"],
+    place_id: str,
+    payload: PlaceIssueReportCreate,
+    user: CurrentUser,
+    settings: SettingsDep,
+) -> dict:
+    try:
+        repository = SupabaseRepository(settings)
+        if source == "official":
+            try:
+                await repository.get_tourist_place(int(place_id))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="El identificador oficial no es válido",
+                ) from exc
+        else:
+            await repository.get_community_place(place_id)
+        return await repository.create_place_issue_report(
+            user_id=user.id,
+            place_source=source,
+            place_id=place_id,
+            data=payload.model_dump(mode="json", exclude_none=True),
+        )
+    except HTTPException:
+        raise
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ExternalServiceError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="No pudimos registrar el reporte por el momento.",
+        ) from exc
 
 
 def _latest_community_profile(events: list[dict]) -> tuple[dict, str | None] | None:

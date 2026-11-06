@@ -245,6 +245,106 @@ class SupabaseRepository:
         )
         return response.json()
 
+    async def create_place_issue_report(
+        self,
+        *,
+        user_id: UUID,
+        place_source: str,
+        place_id: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        response = await self._request(
+            "POST",
+            "place_issue_reports",
+            headers={**self._headers, "Prefer": "return=representation"},
+            json={
+                **data,
+                "user_id": str(user_id),
+                "place_source": place_source,
+                "place_id": place_id,
+                "status": "pending",
+                "observed_at": data.get("observed_at")
+                or datetime.now(UTC).isoformat(),
+            },
+        )
+        return response.json()[0]
+
+    async def list_place_issue_reports(
+        self, *, status: str | None = None, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        params = {"order": "created_at.desc", "limit": str(limit)}
+        if status:
+            params["status"] = f"eq.{status}"
+        response = await self._request(
+            "GET",
+            "place_issue_reports",
+            params=params,
+        )
+        return response.json()
+
+    async def update_place_issue_report(
+        self,
+        report_id: UUID,
+        *,
+        reviewer_id: UUID,
+        status: str,
+        note: str,
+    ) -> dict[str, Any]:
+        response = await self._request(
+            "PATCH",
+            "place_issue_reports",
+            params={"id": f"eq.{report_id}"},
+            headers={**self._headers, "Prefer": "return=representation"},
+            json={
+                "status": status,
+                "review_note": note,
+                "reviewed_by": str(reviewer_id),
+                "reviewed_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        rows = response.json()
+        if not rows:
+            raise ResourceNotFoundError("El reporte seleccionado no existe")
+        return rows[0]
+
+    async def pilot_metrics_inputs(self) -> dict[str, list[dict[str, Any]]]:
+        evidences = await self._request(
+            "GET",
+            "evidences",
+            params={
+                "select": "id,user_id,status,contribution_type,created_at",
+                "limit": "10000",
+            },
+        )
+        coordinates = await self._request(
+            "GET",
+            "place_coordinate_reviews",
+            params={"select": "id,status", "limit": "10000"},
+        )
+        community = await self._request(
+            "GET",
+            "community_places",
+            params={"select": "id,publication_status", "limit": "10000"},
+        )
+        reports = await self._request(
+            "GET",
+            "place_issue_reports",
+            params={
+                "select": (
+                    "id,place_source,place_id,place_name,issue_type,details,status,"
+                    "observed_at,created_at,reviewed_at,review_note"
+                ),
+                "order": "created_at.desc",
+                "limit": "10000",
+            },
+        )
+        return {
+            "evidences": evidences.json(),
+            "coordinates": coordinates.json(),
+            "community_places": community.json(),
+            "reports": reports.json(),
+        }
+
     async def get_travel_state(self, user_id: UUID) -> dict[str, Any] | None:
         response = await self._request(
             "GET",

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 import math
 import unicodedata
@@ -9,7 +10,7 @@ from app.api.deps import AdminUser, SettingsDep
 from app.core.errors import ConfigurationError, ExternalServiceError, ResourceNotFoundError
 from app.core.public_messages import sanitize_evidence_for_public
 from app.schemas.coordinate import CoordinateReviewDecision
-from app.schemas.review import ReviewDecision, ReviewResponse
+from app.schemas.review import PlaceIssueReportDecision, ReviewDecision, ReviewResponse
 from app.services.google_maps import GoogleMapsService
 from app.services.storage import R2StorageService
 from app.services.supabase import SupabaseRepository
@@ -211,6 +212,115 @@ async def review_detail(
             )
         return sanitize_evidence_for_public(row)
     except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
+        raise _service_error(exc) from exc
+
+
+@router.get("/reviews/{evidence_id}/dossier")
+async def evidence_dossier(
+    evidence_id: UUID,
+    _: AdminUser,
+    settings: SettingsDep,
+) -> dict:
+    """Expediente estable para impresión, auditoría o exportación a PDF."""
+    try:
+        repository = SupabaseRepository(settings)
+        evidence = await repository.get_evidence(evidence_id)
+        results = await repository.latest_results_for([str(evidence_id)])
+        events = await repository.processing_events_for([str(evidence_id)])
+        result = results.get(str(evidence_id)) or {}
+        photo_url = None
+        if evidence.get("object_key"):
+            photo_url = R2StorageService(settings).create_download_url(
+                evidence["object_key"], expires_in=900
+            )
+        return {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "institutional_notice": (
+                "Este expediente organiza evidencia comunitaria y no constituye "
+                "un registro oficial ni una declaración de aptitud turística."
+            ),
+            "evidence": sanitize_evidence_for_public(
+                {**evidence, "photo_url": photo_url}
+            ),
+            "validation": {
+                "score": result.get("score"),
+                "coverage": result.get("coverage"),
+                "category": result.get("category"),
+                "reason": result.get("reason"),
+                "rule_version": result.get("rule_version"),
+                "component_scores": result.get("component_scores") or {},
+                "duplicate_result": result.get("duplicate_result") or {},
+                "geospatial_result": result.get("geospatial_result") or {},
+            },
+            "timeline": events.get(str(evidence_id), []),
+            "methodology": [
+                "Evidencia visual enviada por una persona autenticada.",
+                "Coordenadas y precisión registradas al momento del aporte.",
+                "Clasificación visual y contraste geoespacial automatizados.",
+                "Control de posibles duplicados oficiales y comunitarios.",
+                "Decisión final sujeta a revisión humana.",
+            ],
+        }
+    except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
+        raise _service_error(exc) from exc
+
+
+@router.get("/pilot/metrics")
+async def pilot_metrics(
+    _: AdminUser,
+    settings: SettingsDep,
+) -> dict:
+    try:
+        inputs = await SupabaseRepository(settings).pilot_metrics_inputs()
+        evidences = inputs["evidences"]
+        coordinates = inputs["coordinates"]
+        community = inputs["community_places"]
+        reports = inputs["reports"]
+        contributors = {row.get("user_id") for row in evidences if row.get("user_id")}
+        return {
+            "evidences_total": len(evidences),
+            "candidates": sum(row.get("status") == "candidate" for row in evidences),
+            "validated": sum(row.get("status") == "validated" for row in evidences),
+            "duplicates_avoided": sum(
+                row.get("status") == "duplicate" for row in evidences
+            ),
+            "coordinate_corrections": sum(
+                row.get("status") == "applied" for row in coordinates
+            ),
+            "community_places": sum(
+                row.get("publication_status") == "published" for row in community
+            ),
+            "contributors": len(contributors),
+            "open_reports": sum(row.get("status") == "pending" for row in reports),
+            "safety_reports": sum(
+                row.get("issue_type") == "safety_risk" for row in reports
+            ),
+            "recent_reports": reports[:20],
+        }
+    except (ConfigurationError, ExternalServiceError) as exc:
+        raise _service_error(exc) from exc
+
+
+@router.patch("/place-reports/{report_id}")
+async def decide_place_report(
+    report_id: UUID,
+    payload: PlaceIssueReportDecision,
+    admin: AdminUser,
+    settings: SettingsDep,
+) -> dict:
+    """Registra una decisión humana sin alterar automáticamente la ficha."""
+    try:
+        return await SupabaseRepository(settings).update_place_issue_report(
+            report_id,
+            reviewer_id=admin.id,
+            status=payload.status,
+            note=payload.note,
+        )
+    except (
+        ConfigurationError,
+        ExternalServiceError,
+        ResourceNotFoundError,
+    ) as exc:
         raise _service_error(exc) from exc
 
 

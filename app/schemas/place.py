@@ -35,3 +35,15 @@ class CommunityPlaceResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     trust: TrustPassportResponse | None = None
+
+
+class PlaceIssueReportCreate(BaseModel):
+    place_name: str = Field(default="", max_length=180)
+    issue_type: Literal[
+        "access_closed",
+        "safety_risk",
+        "wrong_location",
+        "outdated_info",
+    ]
+    details: str = Field(default="", max_length=500)
+    observed_at: datetime | None = None
