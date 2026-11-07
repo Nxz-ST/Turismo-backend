@@ -85,6 +85,97 @@ class SupabaseRepository:
             raise ResourceNotFoundError("El lugar comunitario seleccionado no existe")
         return rows[0]
 
+    async def list_admin_community_places(
+        self, *, limit: int = 1000
+    ) -> list[dict[str, Any]]:
+        places_response = await self._request(
+            "GET",
+            "community_places",
+            params={"order": "updated_at.desc", "limit": str(limit)},
+        )
+        places = places_response.json()
+        if not places:
+            return []
+        ids = [str(place["id"]) for place in places]
+        evidence_response = await self._request(
+            "GET",
+            "evidences",
+            params={
+                "or": "(community_place_id.not.is.null,target_community_place_id.not.is.null)",
+                "status": "in.(validated,duplicate)",
+                "select": "id,user_id,community_place_id,target_community_place_id,object_key,updated_at",
+                "limit": "10000",
+            },
+        )
+        stats: dict[str, dict[str, Any]] = {
+            place_id: {
+                "evidences": 0,
+                "photos": 0,
+                "contributors": set(),
+                "last_evidence_at": None,
+            }
+            for place_id in ids
+        }
+        for row in evidence_response.json():
+            place_id = str(
+                row.get("community_place_id")
+                or row.get("target_community_place_id")
+                or ""
+            )
+            if place_id not in stats:
+                continue
+            stats[place_id]["evidences"] += 1
+            stats[place_id]["photos"] += bool(row.get("object_key"))
+            if row.get("user_id"):
+                stats[place_id]["contributors"].add(str(row["user_id"]))
+            current = stats[place_id]["last_evidence_at"]
+            if row.get("updated_at") and (current is None or row["updated_at"] > current):
+                stats[place_id]["last_evidence_at"] = row["updated_at"]
+        return [
+            {
+                **place,
+                "evidence_count": stats[str(place["id"])]["evidences"],
+                "photo_count": stats[str(place["id"])]["photos"],
+                "contributor_count": len(stats[str(place["id"])]["contributors"]),
+                "last_evidence_at": stats[str(place["id"])]["last_evidence_at"],
+            }
+            for place in places
+        ]
+
+    async def update_community_place(
+        self, place_id: UUID | str, values: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = await self._request(
+            "PATCH",
+            "community_places",
+            params={"id": f"eq.{place_id}"},
+            headers={**self._headers, "Prefer": "return=representation"},
+            json=values,
+        )
+        rows = response.json()
+        if not rows:
+            raise ResourceNotFoundError("La ficha comunitaria seleccionada no existe")
+        return rows[0]
+
+    async def merge_community_places(
+        self, source_id: UUID, target_id: UUID
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        source = await self.get_community_place(source_id)
+        target = await self.get_community_place(target_id)
+        if str(source_id) == str(target_id):
+            raise ResourceNotFoundError("Selecciona una ficha de destino diferente")
+        for field in ("community_place_id", "target_community_place_id"):
+            await self._request(
+                "PATCH",
+                "evidences",
+                params={field: f"eq.{source_id}"},
+                json={field: str(target_id), "community_place_id": str(target_id)},
+            )
+        source = await self.update_community_place(
+            source_id, {"publication_status": "hidden"}
+        )
+        return source, target
+
     async def promote_community_place(self, evidence: dict[str, Any]) -> dict[str, Any]:
         category = evidence.get("predicted_category")
         if not category:
@@ -312,7 +403,7 @@ class SupabaseRepository:
             "GET",
             "evidences",
             params={
-                "select": "id,user_id,status,contribution_type,created_at",
+                "select": "id,user_id,status,contribution_type,presence_status,created_at",
                 "limit": "10000",
             },
         )
@@ -338,11 +429,30 @@ class SupabaseRepository:
                 "limit": "10000",
             },
         )
+        events = await self._request(
+            "GET",
+            "processing_events",
+            params={
+                "select": "evidence_id,stage,status,duration_ms,metadata,created_at",
+                "limit": "10000",
+            },
+        )
+        results = await self._request(
+            "GET",
+            "validation_results",
+            params={
+                "select": "evidence_id,geospatial_result,created_at",
+                "order": "created_at.desc",
+                "limit": "10000",
+            },
+        )
         return {
             "evidences": evidences.json(),
             "coordinates": coordinates.json(),
             "community_places": community.json(),
             "reports": reports.json(),
+            "events": events.json(),
+            "results": results.json(),
         }
 
     async def get_travel_state(self, user_id: UUID) -> dict[str, Any] | None:

@@ -10,7 +10,13 @@ from app.api.deps import AdminUser, SettingsDep
 from app.core.errors import ConfigurationError, ExternalServiceError, ResourceNotFoundError
 from app.core.public_messages import sanitize_evidence_for_public
 from app.schemas.coordinate import CoordinateReviewDecision
-from app.schemas.review import PlaceIssueReportDecision, ReviewDecision, ReviewResponse
+from app.schemas.review import (
+    CommunityPlaceAdminUpdate,
+    CommunityPlaceMerge,
+    PlaceIssueReportDecision,
+    ReviewDecision,
+    ReviewResponse,
+)
 from app.services.google_maps import GoogleMapsService
 from app.services.storage import R2StorageService
 from app.services.supabase import SupabaseRepository
@@ -276,7 +282,32 @@ async def pilot_metrics(
         coordinates = inputs["coordinates"]
         community = inputs["community_places"]
         reports = inputs["reports"]
+        events = inputs["events"]
+        results = inputs["results"]
         contributors = {row.get("user_id") for row in evidences if row.get("user_id")}
+        durations = [
+            int(row["duration_ms"])
+            for row in events
+            if row.get("duration_ms") is not None and int(row["duration_ms"]) >= 0
+        ]
+        profiled = {
+            str(row.get("evidence_id"))
+            for row in events
+            if (row.get("metadata") or {}).get("event_type") == "community_profile"
+        }
+        latest_results: dict[str, dict] = {}
+        for row in results:
+            latest_results.setdefault(str(row.get("evidence_id")), row)
+        terrain_available = 0
+        sentinel_available = 0
+        for row in latest_results.values():
+            geo = row.get("geospatial_result") or {}
+            terrain = geo.get("terrain") or geo.get("sentinel") or {}
+            if terrain and not terrain.get("unavailable") and terrain.get("available", True):
+                terrain_available += 1
+            sentinel = geo.get("sentinel") or {}
+            if sentinel and not sentinel.get("unavailable") and sentinel.get("available", True):
+                sentinel_available += 1
         return {
             "evidences_total": len(evidences),
             "candidates": sum(row.get("status") == "candidate" for row in evidences),
@@ -295,9 +326,97 @@ async def pilot_metrics(
             "safety_reports": sum(
                 row.get("issue_type") == "safety_risk" for row in reports
             ),
+            "new_place_contributions": sum(
+                row.get("contribution_type") == "new_place" for row in evidences
+            ),
+            "existing_place_contributions": sum(
+                row.get("contribution_type") == "existing_place" for row in evidences
+            ),
+            "rejected": sum(row.get("status") == "rejected" for row in evidences),
+            "needs_review": sum(row.get("status") == "needs_review" for row in evidences),
+            "profiled_places": len(profiled),
+            "gps_confirmed": sum(
+                row.get("presence_status") in {"confirmed", "verified"}
+                for row in evidences
+            ),
+            "avg_processing_seconds": round(sum(durations) / len(durations) / 1000, 1)
+            if durations else 0,
+            "sentinel_available": sentinel_available,
+            "terrain_available": terrain_available,
             "recent_reports": reports[:20],
         }
     except (ConfigurationError, ExternalServiceError) as exc:
+        raise _service_error(exc) from exc
+
+
+@router.get("/community-places")
+async def admin_community_places(_: AdminUser, settings: SettingsDep) -> list[dict]:
+    try:
+        return await SupabaseRepository(settings).list_admin_community_places()
+    except (ConfigurationError, ExternalServiceError) as exc:
+        raise _service_error(exc) from exc
+
+
+@router.patch("/community-places/{place_id}")
+async def update_admin_community_place(
+    place_id: UUID,
+    payload: CommunityPlaceAdminUpdate,
+    admin: AdminUser,
+    settings: SettingsDep,
+) -> dict:
+    try:
+        repository = SupabaseRepository(settings)
+        before = await repository.get_community_place(place_id)
+        values = payload.model_dump(exclude={"note"}, exclude_none=True)
+        if not values:
+            raise HTTPException(status_code=422, detail="Indica al menos un cambio para la ficha")
+        updated = await repository.update_community_place(place_id, values)
+        if before.get("origin_evidence_id"):
+            await repository.save_processing_event(
+                evidence_id=UUID(str(before["origin_evidence_id"])),
+                stage="human_review",
+                status="completed",
+                title="Ficha comunitaria actualizada",
+                detail=payload.note,
+                metadata={
+                    "event_type": "community_place_admin_update",
+                    "reviewer_id": str(admin.id),
+                    "changes": values,
+                },
+            )
+        return updated
+    except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
+        raise _service_error(exc) from exc
+
+
+@router.post("/community-places/{place_id}/merge")
+async def merge_admin_community_place(
+    place_id: UUID,
+    payload: CommunityPlaceMerge,
+    admin: AdminUser,
+    settings: SettingsDep,
+) -> dict:
+    try:
+        repository = SupabaseRepository(settings)
+        source, target = await repository.merge_community_places(
+            place_id, payload.target_place_id
+        )
+        if source.get("origin_evidence_id"):
+            await repository.save_processing_event(
+                evidence_id=UUID(str(source["origin_evidence_id"])),
+                stage="human_review",
+                status="completed",
+                title="Ficha comunitaria fusionada",
+                detail=payload.note,
+                metadata={
+                    "event_type": "community_place_merge",
+                    "reviewer_id": str(admin.id),
+                    "source_place_id": str(place_id),
+                    "target_place_id": str(payload.target_place_id),
+                },
+            )
+        return {"source": source, "target": target}
+    except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
         raise _service_error(exc) from exc
 
 

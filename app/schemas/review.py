@@ -29,3 +29,19 @@ class ReviewResponse(BaseModel):
 class PlaceIssueReportDecision(BaseModel):
     status: Literal["reviewed", "resolved", "dismissed"]
     note: str = Field(min_length=3, max_length=500)
+
+
+class CommunityPlaceAdminUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=140)
+    description: str | None = Field(default=None, max_length=2000)
+    category: Literal[
+        "bosque", "cascada", "desierto", "lago", "montana", "nevado",
+        "playa", "volcan",
+    ] | None = None
+    publication_status: Literal["published", "under_review", "hidden"] | None = None
+    note: str = Field(min_length=3, max_length=500)
+
+
+class CommunityPlaceMerge(BaseModel):
+    target_place_id: UUID
+    note: str = Field(min_length=3, max_length=500)
