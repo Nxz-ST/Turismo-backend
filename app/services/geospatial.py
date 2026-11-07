@@ -300,41 +300,45 @@ function evaluatePixel(s) {
             longitude,
             longitude - lon_offset,
         ]
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.get(
-                    self.ELEVATION_URL,
-                    params={
-                        "latitude": ",".join(map(str, latitudes)),
-                        "longitude": ",".join(map(str, longitudes)),
-                    },
-                )
-            response.raise_for_status()
-            values = [
-                float(value) for value in response.json().get("elevation") or []
-            ]
-            if len(values) != 5:
-                raise ValueError("Respuesta incompleta de elevación")
-            relief = max(values) - min(values)
-            return {
-                "status": "available",
-                "elevation_m": values[0],
-                "local_min_elevation_m": min(values),
-                "local_max_elevation_m": max(values),
-                "local_relief_m": round(relief, 1),
-                "estimated_slope_percent": round(relief / 200 * 100, 1),
-                "profile_radius_m": 100,
-                "resolution_m": 90,
-                "source": "Copernicus DEM GLO-90 / Open-Meteo",
-            }
-        except (httpx.HTTPError, ValueError, TypeError) as exc:
-            return {
-                "status": "unavailable",
-                "reason": (
-                    "No se pudo consultar el modelo de elevación: "
-                    f"{type(exc).__name__}"
-                ),
-            }
+        params = {
+            "latitude": ",".join(map(str, latitudes)),
+            "longitude": ",".join(map(str, longitudes)),
+        }
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    response = await client.get(self.ELEVATION_URL, params=params)
+                response.raise_for_status()
+                values = [
+                    float(value)
+                    for value in response.json().get("elevation") or []
+                ]
+                if len(values) != 5:
+                    raise ValueError("Respuesta incompleta de elevación")
+                relief = max(values) - min(values)
+                return {
+                    "status": "available",
+                    "elevation_m": values[0],
+                    "local_min_elevation_m": min(values),
+                    "local_max_elevation_m": max(values),
+                    "local_relief_m": round(relief, 1),
+                    "estimated_slope_percent": round(relief / 200 * 100, 1),
+                    "profile_radius_m": 100,
+                    "resolution_m": 90,
+                    "source": "Copernicus DEM GLO-90 / Open-Meteo",
+                    "attempts": attempt + 1,
+                }
+            except (httpx.HTTPError, ValueError, TypeError) as exc:
+                last_error = exc
+                if attempt < 2:
+                    await asyncio.sleep(0.6 * (attempt + 1))
+        return {
+            "status": "unavailable",
+            "reason": "El relieve no respondió después de 3 intentos.",
+            "error_type": type(last_error).__name__ if last_error else "unknown",
+            "attempts": 3,
+        }
 
     def _environmental_coherence(
         self,
