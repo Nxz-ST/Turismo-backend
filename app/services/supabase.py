@@ -131,6 +131,12 @@ class SupabaseRepository:
             current = stats[place_id]["last_evidence_at"]
             if row.get("updated_at") and (current is None or row["updated_at"] > current):
                 stats[place_id]["last_evidence_at"] = row["updated_at"]
+        origin_ids = [
+            str(place["origin_evidence_id"])
+            for place in places
+            if place.get("origin_evidence_id")
+        ]
+        histories = await self.processing_events_for(origin_ids)
         return [
             {
                 **place,
@@ -138,6 +144,14 @@ class SupabaseRepository:
                 "photo_count": stats[str(place["id"])]["photos"],
                 "contributor_count": len(stats[str(place["id"])]["contributors"]),
                 "last_evidence_at": stats[str(place["id"])]["last_evidence_at"],
+                "admin_history": [
+                    event
+                    for event in histories.get(
+                        str(place.get("origin_evidence_id")), []
+                    )
+                    if str((event.get("metadata") or {}).get("event_type", ""))
+                    .startswith("community_place_")
+                ],
             }
             for place in places
         ]
