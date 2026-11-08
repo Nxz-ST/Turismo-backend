@@ -364,6 +364,50 @@ async def pilot_metrics(
                 bucket["validated"] += 1
             if row.get("status") == "rejected":
                 bucket["rejected"] += 1
+        evidence_by_id = {str(row.get("id")): row for row in evidences}
+        assignment_by_evidence: dict[str, dict] = {}
+        review_finished_at: dict[str, datetime] = {}
+        for event in sorted(events, key=lambda row: str(row.get("created_at") or "")):
+            evidence_id = str(event.get("evidence_id") or "")
+            metadata = event.get("metadata") or {}
+            if metadata.get("event_type") == "review_assignment":
+                assignment_by_evidence[evidence_id] = event
+            if event.get("stage") == "human_review" and event.get("created_at"):
+                try:
+                    review_finished_at[evidence_id] = datetime.fromisoformat(
+                        str(event["created_at"]).replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    pass
+        reviewer_workload: dict[str, int] = {}
+        for evidence_id, event in assignment_by_evidence.items():
+            evidence = evidence_by_id.get(evidence_id) or {}
+            if evidence.get("status") in {"validated", "rejected", "duplicate"}:
+                continue
+            email = str((event.get("metadata") or {}).get("reviewer_email") or "").strip()
+            if email:
+                reviewer_workload[email] = reviewer_workload.get(email, 0) + 1
+        review_hours: list[float] = []
+        for evidence_id, finished in review_finished_at.items():
+            created_raw = (evidence_by_id.get(evidence_id) or {}).get("created_at")
+            if not created_raw:
+                continue
+            try:
+                created = datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if finished >= created:
+                review_hours.append((finished - created).total_seconds() / 3600)
+        today = datetime.now(UTC).date().isoformat()
+        critical_today = sum(
+            row.get("status") == "needs_review" and str(row.get("created_at") or "").startswith(today)
+            for row in evidences
+        ) + sum(
+            row.get("status") == "pending"
+            and row.get("issue_type") == "safety_risk"
+            and str(row.get("created_at") or "").startswith(today)
+            for row in reports
+        )
         return {
             "evidences_total": len(evidences),
             "candidates": sum(row.get("status") == "candidate" for row in evidences),
@@ -404,6 +448,15 @@ async def pilot_metrics(
                 {"date": date, **values}
                 for date, values in sorted(daily.items())[-14:]
             ],
+            "critical_today": critical_today,
+            "avg_review_hours": round(sum(review_hours) / len(review_hours), 1)
+            if review_hours else 0,
+            "reviewer_workload": [
+                {"reviewer": reviewer, "pending": pending}
+                for reviewer, pending in sorted(
+                    reviewer_workload.items(), key=lambda item: item[1], reverse=True
+                )
+            ],
         }
     except (ConfigurationError, ExternalServiceError) as exc:
         raise _service_error(exc) from exc
@@ -442,6 +495,11 @@ async def update_admin_community_place(
                     "event_type": "community_place_admin_update",
                     "reviewer_id": str(admin.id),
                     "changes": values,
+                    "before": {
+                        key: before.get(key)
+                        for key in values
+                    },
+                    "after": values,
                 },
             )
         return updated
