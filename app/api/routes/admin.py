@@ -15,6 +15,7 @@ from app.schemas.review import (
     CommunityPlaceMerge,
     PlaceIssueReportDecision,
     ReviewDecision,
+    ReviewAssignment,
     ReviewResponse,
 )
 from app.services.google_maps import GoogleMapsService
@@ -271,6 +272,50 @@ async def evidence_dossier(
         raise _service_error(exc) from exc
 
 
+@router.post("/reviews/{evidence_id}/assignment")
+async def assign_review(
+    evidence_id: UUID,
+    payload: ReviewAssignment,
+    admin: AdminUser,
+    settings: SettingsDep,
+) -> dict:
+    try:
+        repository = SupabaseRepository(settings)
+        await repository.get_evidence(evidence_id)
+        reviewer = payload.reviewer_email.strip() if payload.reviewer_email else None
+        await repository.save_processing_event(
+            evidence_id=evidence_id,
+            stage="assignment",
+            status="completed",
+            title="Caso asignado" if reviewer else "Asignación retirada",
+            detail=payload.note,
+            metadata={
+                "event_type": "review_assignment",
+                "reviewer_email": reviewer,
+                "assigned_by": admin.email or str(admin.id),
+            },
+        )
+        return {"evidence_id": str(evidence_id), "reviewer_email": reviewer}
+    except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
+        raise _service_error(exc) from exc
+
+
+@router.get("/audit")
+async def global_audit(
+    _: AdminUser,
+    settings: SettingsDep,
+    limit: int = Query(default=300, ge=1, le=1000),
+) -> list[dict]:
+    try:
+        repository = SupabaseRepository(settings)
+        events = await repository.list_processing_events(limit=limit)
+        evidence_ids = {str(row.get("evidence_id")) for row in events if row.get("evidence_id")}
+        names = await repository.evidence_names(sorted(evidence_ids))
+        return [{**event, "evidence_name": names.get(str(event.get("evidence_id")))} for event in events]
+    except (ConfigurationError, ExternalServiceError) as exc:
+        raise _service_error(exc) from exc
+
+
 @router.get("/pilot/metrics")
 async def pilot_metrics(
     _: AdminUser,
@@ -308,6 +353,17 @@ async def pilot_metrics(
             sentinel = geo.get("sentinel") or {}
             if sentinel and not sentinel.get("unavailable") and sentinel.get("available", True):
                 sentinel_available += 1
+        daily: dict[str, dict[str, int]] = {}
+        for row in evidences:
+            created = str(row.get("created_at") or "")[:10]
+            if not created:
+                continue
+            bucket = daily.setdefault(created, {"total": 0, "validated": 0, "rejected": 0})
+            bucket["total"] += 1
+            if row.get("status") == "validated":
+                bucket["validated"] += 1
+            if row.get("status") == "rejected":
+                bucket["rejected"] += 1
         return {
             "evidences_total": len(evidences),
             "candidates": sum(row.get("status") == "candidate" for row in evidences),
@@ -344,6 +400,10 @@ async def pilot_metrics(
             "sentinel_available": sentinel_available,
             "terrain_available": terrain_available,
             "recent_reports": reports[:20],
+            "daily_activity": [
+                {"date": date, **values}
+                for date, values in sorted(daily.items())[-14:]
+            ],
         }
     except (ConfigurationError, ExternalServiceError) as exc:
         raise _service_error(exc) from exc

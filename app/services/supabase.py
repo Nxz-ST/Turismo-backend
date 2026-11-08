@@ -931,6 +931,30 @@ class SupabaseRepository:
             grouped.setdefault(str(row["evidence_id"]), []).append(row)
         return grouped
 
+    async def list_processing_events(self, *, limit: int = 300) -> list[dict[str, Any]]:
+        try:
+            response = await self._request(
+                "GET",
+                "processing_events",
+                params={"order": "created_at.desc", "limit": str(limit)},
+            )
+            return response.json()
+        except ExternalServiceError as exc:
+            if "processing_events" in str(exc):
+                return []
+            raise
+
+    async def evidence_names(self, evidence_ids: list[str]) -> dict[str, str]:
+        names: dict[str, str] = {}
+        for start in range(0, len(evidence_ids), 80):
+            chunk = evidence_ids[start:start + 80]
+            response = await self._request(
+                "GET", "evidences",
+                params={"id": f"in.({','.join(chunk)})", "select": "id,name"},
+            )
+            names.update({str(row["id"]): row.get("name") or "Evidencia sin nombre" for row in response.json()})
+        return names
+
     async def update_job(self, job_id: UUID, values: dict[str, Any]) -> None:
         await self._request(
             "PATCH",

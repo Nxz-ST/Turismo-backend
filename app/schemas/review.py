@@ -26,6 +26,11 @@ class ReviewResponse(BaseModel):
     decision_reason: str | None = None
 
 
+class ReviewAssignment(BaseModel):
+    reviewer_email: str | None = Field(default=None, max_length=200)
+    note: str = Field(default="Asignación operativa del expediente", min_length=3, max_length=500)
+
+
 class PlaceIssueReportDecision(BaseModel):
     status: Literal["reviewed", "resolved", "dismissed"]
     note: str = Field(min_length=3, max_length=500)
