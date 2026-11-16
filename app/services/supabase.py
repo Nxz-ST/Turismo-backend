@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 import math
+import secrets
 from typing import Any
 from uuid import UUID
 
@@ -493,6 +494,30 @@ class SupabaseRepository:
         )
         return response.json()[0]
 
+    async def get_user_profile(self, user_id: UUID) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "user_profiles",
+            params={"user_id": f"eq.{user_id}", "limit": "1"},
+        )
+        rows = response.json()
+        return rows[0] if rows else None
+
+    async def upsert_user_profile(
+        self, *, user_id: UUID, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = await self._request(
+            "POST",
+            "user_profiles",
+            params={"on_conflict": "user_id"},
+            headers={
+                **self._headers,
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            },
+            json={**data, "user_id": str(user_id)},
+        )
+        return response.json()[0]
+
     async def save_presence_samples(
         self, *, user_id: UUID, samples: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -857,6 +882,44 @@ class SupabaseRepository:
                 latest[evidence_id] = row
         return latest
 
+    async def latest_model_results_for(
+        self, evidence_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Último raw_result del motor visual por evidencia.
+
+        La revisión humana guarda filas propias en validation_results con un
+        raw_result sin datos del modelo; esas filas se ignoran.
+        """
+        if not evidence_ids:
+            return {}
+        response = await self._request(
+            "GET",
+            "validation_results",
+            params={
+                "evidence_id": f"in.({','.join(evidence_ids)})",
+                "select": (
+                    "evidence_id,created_at,"
+                    "estado:raw_result->>estado,"
+                    "clasificacion_modelo:raw_result->>clasificacion_modelo,"
+                    "confianza_modelo:raw_result->>confianza_modelo,"
+                    "clase_embeddings:raw_result->>clase_embeddings,"
+                    "similitud_visual:raw_result->>similitud_visual,"
+                    "motivo_decision:raw_result->>motivo_decision,"
+                    "gemma:raw_result->gemma,"
+                    "fusion:raw_result->fusion"
+                ),
+                "order": "created_at.desc",
+            },
+        )
+        latest: dict[str, dict[str, Any]] = {}
+        for row in response.json():
+            evidence_id = str(row["evidence_id"])
+            if evidence_id in latest:
+                continue
+            if row.get("clasificacion_modelo") or row.get("gemma"):
+                latest[evidence_id] = row
+        return latest
+
     async def update_evidence(self, evidence_id: UUID, values: dict[str, Any]) -> dict[str, Any]:
         response = await self._request(
             "PATCH",
@@ -1152,4 +1215,236 @@ class SupabaseRepository:
             },
         )
         return response.json()
+
+    async def agency_membership(self, user_id: UUID) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "agency_members",
+            params={
+                "user_id": f"eq.{user_id}",
+                "active": "eq.true",
+                "select": "id,agency_id,member_role,agency:agencies(id,name,slug,initials,whatsapp_phone,status,is_demo)",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        return rows[0] if rows else None
+
+    async def list_benefits_for_place(
+        self, *, place_source: str, place_id: str, place_name: str
+    ) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "tourism_benefits",
+            params={
+                "status": "eq.active",
+                "or": f"(applies_to_all.eq.true,and(place_source.eq.{place_source},place_id.eq.{place_id}))",
+                "select": "*,agency:agencies(id,name,slug,initials,whatsapp_phone,status,is_demo)",
+                "order": "recommended.desc,rating.desc",
+            },
+        )
+        benefits = []
+        for row in response.json():
+            agency = row.get("agency") or {}
+            if agency.get("status") != "active":
+                continue
+            benefits.append(
+                {
+                    **row,
+                    "title": str(row.get("title_template") or "Experiencia").replace(
+                        "{place}", place_name
+                    ),
+                    "summary": str(row.get("summary_template") or "").replace(
+                        "{place}", place_name
+                    ),
+                }
+            )
+        return benefits
+
+    async def get_benefit(self, benefit_id: UUID | str) -> dict[str, Any]:
+        response = await self._request(
+            "GET",
+            "tourism_benefits",
+            params={
+                "id": f"eq.{benefit_id}",
+                "status": "eq.active",
+                "select": "*,agency:agencies(*)",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            raise ResourceNotFoundError("El beneficio seleccionado no existe")
+        return rows[0]
+
+    async def active_benefit_redemption(
+        self, *, user_id: UUID, benefit_id: UUID, place_source: str, place_id: str
+    ) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "benefit_redemptions",
+            params={
+                "user_id": f"eq.{user_id}",
+                "benefit_id": f"eq.{benefit_id}",
+                "place_source": f"eq.{place_source}",
+                "place_id": f"eq.{place_id}",
+                "status": "in.(requested,confirmed)",
+                "select": "*,benefit:tourism_benefits(*),agency:agencies(*)",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        return rows[0] if rows else None
+
+    async def create_benefit_redemption(
+        self,
+        *,
+        user_id: UUID,
+        benefit: dict[str, Any],
+        place_source: str,
+        place_id: str,
+        place_name: str,
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        code = f"RUTA-{str(benefit['id'])[:4].upper()}-{secrets.token_hex(3).upper()}"
+        response = await self._request(
+            "POST",
+            "benefit_redemptions",
+            headers={**self._headers, "Prefer": "return=representation"},
+            json={
+                "code": code,
+                "benefit_id": str(benefit["id"]),
+                "agency_id": str(benefit["agency_id"]),
+                "user_id": str(user_id),
+                "place_source": place_source,
+                "place_id": place_id,
+                "place_name": place_name,
+                "status": "requested",
+                "expires_at": (now + timedelta(days=7)).isoformat(),
+            },
+        )
+        row = response.json()[0]
+        await self._request(
+            "POST",
+            "benefit_audit_events",
+            json={
+                "redemption_id": row["id"],
+                "actor_user_id": str(user_id),
+                "to_status": "requested",
+                "note": "Beneficio solicitado desde la aplicación",
+            },
+        )
+        return {**row, "benefit": benefit, "agency": benefit.get("agency")}
+
+    async def list_user_redemptions(self, user_id: UUID) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "benefit_redemptions",
+            params={
+                "user_id": f"eq.{user_id}",
+                "select": "*,benefit:tourism_benefits(*),agency:agencies(*)",
+                "order": "created_at.desc",
+            },
+        )
+        return response.json()
+
+    async def list_agency_redemptions(
+        self, agency_id: UUID | str, *, status_filter: str | None = None
+    ) -> list[dict[str, Any]]:
+        params = {
+            "agency_id": f"eq.{agency_id}",
+            "select": "*,benefit:tourism_benefits(title_template,benefit_label,rutaamiga_price),agency:agencies(name,slug,is_demo)",
+            "order": "created_at.desc",
+            "limit": "500",
+        }
+        if status_filter:
+            params["status"] = f"eq.{status_filter}"
+        response = await self._request("GET", "benefit_redemptions", params=params)
+        return response.json()
+
+    async def agency_redemption_by_code(
+        self, *, agency_id: UUID | str, code: str
+    ) -> dict[str, Any]:
+        response = await self._request(
+            "GET",
+            "benefit_redemptions",
+            params={
+                "agency_id": f"eq.{agency_id}",
+                "code": f"eq.{code.strip().upper()}",
+                "select": "*,benefit:tourism_benefits(*),agency:agencies(*)",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            raise ResourceNotFoundError("El código no pertenece a esta agencia")
+        return rows[0]
+
+    async def transition_benefit_redemption(
+        self,
+        *,
+        redemption: dict[str, Any],
+        actor_user_id: UUID,
+        target_status: str,
+        note: str | None,
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC).isoformat()
+        values: dict[str, Any] = {
+            "status": target_status,
+            "agency_note": note,
+            "updated_at": now,
+        }
+        timestamp_field = {
+            "confirmed": "confirmed_at",
+            "redeemed": "redeemed_at",
+            "cancelled": "cancelled_at",
+        }.get(target_status)
+        if timestamp_field:
+            values[timestamp_field] = now
+        response = await self._request(
+            "PATCH",
+            "benefit_redemptions",
+            params={"id": f"eq.{redemption['id']}"},
+            headers={**self._headers, "Prefer": "return=representation"},
+            json=values,
+        )
+        updated = response.json()[0]
+        await self._request(
+            "POST",
+            "benefit_audit_events",
+            json={
+                "redemption_id": redemption["id"],
+                "actor_user_id": str(actor_user_id),
+                "from_status": redemption.get("status"),
+                "to_status": target_status,
+                "note": note,
+            },
+        )
+        return updated
+
+    async def list_agencies(self) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET", "agencies", params={"select": "*", "order": "name.asc"}
+        )
+        return response.json()
+
+    async def add_agency_member(
+        self, *, agency_id: UUID, user_id: UUID, member_role: str
+    ) -> dict[str, Any]:
+        response = await self._request(
+            "POST",
+            "agency_members",
+            params={"on_conflict": "agency_id,user_id"},
+            headers={
+                **self._headers,
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            },
+            json={
+                "agency_id": str(agency_id),
+                "user_id": str(user_id),
+                "member_role": member_role,
+                "active": True,
+            },
+        )
+        return response.json()[0]
 

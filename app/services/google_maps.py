@@ -1,4 +1,3 @@
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -12,8 +11,6 @@ class GoogleMapsService:
         "restaurant", "lodging", "pharmacy", "gas_station", "atm",
         "travel_agency", "tourist_information_center",
     }
-    _photos_unavailable_until: datetime | None = None
-
     def __init__(self, settings: Settings):
         self._settings = settings
 
@@ -241,10 +238,6 @@ class GoogleMapsService:
         longitude: float,
         limit: int = 8,
     ) -> list[dict[str, str]]:
-        unavailable_until = type(self)._photos_unavailable_until
-        if unavailable_until and datetime.now(timezone.utc) < unavailable_until:
-            return []
-
         headers = {
             "Content-Type": "application/json",
             "X-Goog-Api-Key": self._key(),
@@ -270,9 +263,9 @@ class GoogleMapsService:
             if response.status_code in {401, 403}:
                 # La foto es un enriquecimiento opcional. Una clave restringida
                 # o una API aún no habilitada no debe ocultar datos MINCETUR.
-                type(self)._photos_unavailable_until = datetime.now(
-                    timezone.utc
-                ) + timedelta(minutes=5)
+                # Tampoco bloqueamos globalmente las demás fotos: durante una
+                # activación de facturación Google puede responder 403 de forma
+                # transitoria para una petición mientras otras ya funcionan.
                 return []
             raise ExternalServiceError(self._error_message("Google Places", response))
         places = response.json().get("places") or []

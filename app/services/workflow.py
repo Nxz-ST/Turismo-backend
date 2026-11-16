@@ -37,6 +37,54 @@ def _automatic_official_match(
     return min(matches, key=lambda item: float(item.get("distance_m") or 999_999))
 
 
+# Radio de búsqueda de fichas comunitarias. Lugares extensos (playas, lagos,
+# bosques) pueden fotografiarse a más de 100 m del punto de la ficha original.
+COMMUNITY_MATCH_RADIUS_M = 150
+STRONG_MATCH_RADIUS_M = 75
+NAME_MATCH_THRESHOLD = 0.60
+
+
+def _is_high_match(distance: float, similarity: float, category_match: bool) -> bool:
+    """Misma ficha probable.
+
+    Hasta 75 m basta el nombre o la categoría. Hasta 150 m se exigen ambos para
+    no absorber un atractivo vecino distinto de la misma categoría.
+    """
+    if distance <= STRONG_MATCH_RADIUS_M:
+        return similarity >= NAME_MATCH_THRESHOLD or category_match
+    return (
+        distance <= COMMUNITY_MATCH_RADIUS_M
+        and similarity >= NAME_MATCH_THRESHOLD
+        and category_match
+    )
+
+
+def _automatic_community_match(
+    evidence: dict, duplicate_result: dict
+) -> dict | None:
+    """Ficha comunitaria publicada que debe recibir el aporte en vez de duplicarse.
+
+    Solo se vincula automáticamente con la misma categoría visual; un conflicto
+    de categoría sigue el flujo de rechazo existente.
+    """
+    if (
+        evidence.get("contribution_type") != "new_place"
+        or duplicate_result.get("status") != "high_match"
+    ):
+        return None
+    matches = [
+        item
+        for item in duplicate_result.get("candidates") or []
+        if item.get("source") == "community"
+        and item.get("high_match")
+        and item.get("category_match")
+        and item.get("id")
+    ]
+    if not matches:
+        return None
+    return min(matches, key=lambda item: float(item.get("distance_m") or 999_999))
+
+
 def _persisted_duplicate_status(value: object) -> str:
     """Keep compatibility with databases that have the pre-013 constraint."""
     status = str(value or "not_evaluated")
@@ -159,6 +207,32 @@ class ValidationWorkflow:
                     duplicate_result["note"] = (
                         "RutaAmiga reconoció un atractivo oficial cercano y "
                         "guardó la evidencia como un aporte adicional."
+                    )
+                community_match = (
+                    None
+                    if official_match is not None
+                    else _automatic_community_match(evidence, duplicate_result)
+                )
+                if community_match is not None:
+                    evidence = await self._repository.update_evidence(
+                        evidence_id,
+                        {
+                            "contribution_type": "existing_place",
+                            "target_place_id": None,
+                            "target_community_place_id": str(community_match["id"]),
+                            "target_place_snapshot": {
+                                "community_evidence_id": str(community_match["id"]),
+                                "nombre": community_match.get("name"),
+                                "categoria": community_match.get("candidate_category"),
+                                "distance_m": community_match.get("distance_m"),
+                                "linked_automatically": True,
+                            },
+                            "target_distance_m": community_match.get("distance_m"),
+                        },
+                    )
+                    duplicate_result["note"] = (
+                        "RutaAmiga reconoció un descubrimiento comunitario de la "
+                        "misma categoría y guardó la evidencia como aporte a esa ficha."
                     )
                 if evidence.get("contribution_type") == "existing_place" and (
                     evidence.get("target_place_id") is not None
@@ -337,7 +411,7 @@ class ValidationWorkflow:
             errors.append(f"mincetur: {type(exc).__name__}")
         try:
             community = await self._repository.nearby_community_places(
-                evidence["latitude"], evidence["longitude"], 150
+                evidence["latitude"], evidence["longitude"], COMMUNITY_MATCH_RADIUS_M
             )
             community = [
                 row for row in community if str(row.get("id")) != str(evidence["id"])
@@ -458,7 +532,7 @@ class ValidationWorkflow:
             "distance_m": round(distance, 1),
             "name_similarity": round(similarity, 3),
             "category_match": category_match,
-            "high_match": distance <= 75 and (similarity >= 0.60 or category_match),
+            "high_match": _is_high_match(distance, similarity, category_match),
         }
 
     @staticmethod

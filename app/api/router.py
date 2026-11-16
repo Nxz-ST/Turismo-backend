@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes import admin, evidences, health, itineraries, maps, places, presence, travel, uploads, visits, weather
+from app.api.routes import admin, benefits, evidences, health, itineraries, maps, places, presence, profile, travel, uploads, visits, weather
 
 
 api_router = APIRouter()
@@ -15,4 +15,6 @@ api_router.include_router(presence.router, prefix="/presence", tags=["presence"]
 api_router.include_router(visits.router, prefix="/visits", tags=["visits"])
 api_router.include_router(weather.router, prefix="/weather", tags=["weather"])
 api_router.include_router(travel.router, prefix="/me/travel", tags=["travel"])
+api_router.include_router(profile.router, prefix="/me/profile", tags=["profile"])
+api_router.include_router(benefits.router, prefix="/benefits", tags=["benefits"])
 

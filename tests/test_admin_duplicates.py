@@ -105,3 +105,64 @@ async def test_review_does_not_merge_a_different_nearby_category() -> None:
     )
 
     assert duplicate is None
+
+
+@pytest.mark.asyncio
+async def test_review_consolidates_same_beach_at_110_meters() -> None:
+    # Caso real: dos aportes de "Playa el silencio" separados por ~110 m.
+    class Repository:
+        async def nearby_community_places(self, *_args):
+            return [
+                {
+                    "id": "first-beach",
+                    "nombre": "Playa el silencio",
+                    "categoria_ia": "playa",
+                    "estado_validacion": "validated",
+                    "latitud": -12.317277,
+                    "longitud": -76.835859,
+                }
+            ]
+
+    duplicate = await _fresh_validated_community_duplicate(
+        Repository(),
+        {
+            "id": "second-beach",
+            "name": "Playa El Silencio",
+            "latitude": -12.316448,
+            "longitude": -76.836422,
+        },
+        "playa",
+    )
+
+    assert duplicate is not None
+    assert duplicate[0]["id"] == "first-beach"
+    assert 100 < duplicate[1]["distance_m"] < 120
+
+
+@pytest.mark.asyncio
+async def test_review_keeps_different_beach_names_apart_at_110_meters() -> None:
+    class Repository:
+        async def nearby_community_places(self, *_args):
+            return [
+                {
+                    "id": "neighbor-beach",
+                    "nombre": "Playa Las Gaviotas",
+                    "categoria_ia": "playa",
+                    "estado_validacion": "validated",
+                    "latitud": -12.317277,
+                    "longitud": -76.835859,
+                }
+            ]
+
+    duplicate = await _fresh_validated_community_duplicate(
+        Repository(),
+        {
+            "id": "second-beach",
+            "name": "Playa El Silencio",
+            "latitude": -12.316448,
+            "longitude": -76.836422,
+        },
+        "playa",
+    )
+
+    assert duplicate is None

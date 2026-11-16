@@ -48,3 +48,32 @@ class SupabaseAuthService:
             app_metadata=payload.get("app_metadata") or {},
         )
 
+    async def create_agency_user(self, *, email: str, password: str) -> AuthenticatedUser:
+        if not self._settings.supabase_url or not self._settings.supabase_service_role_key:
+            raise ConfigurationError("Supabase Auth no esta configurado")
+        key = self._settings.supabase_service_role_key
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                f"{self._settings.supabase_url.rstrip('/')}/auth/v1/admin/users",
+                headers={
+                    "apikey": key,
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "email": email,
+                    "password": password,
+                    "email_confirm": True,
+                    "app_metadata": {"role": "agency"},
+                },
+            )
+        if response.is_error:
+            raise ExternalServiceError("No se pudo crear la cuenta de agencia")
+        payload = response.json()
+        return AuthenticatedUser(
+            id=UUID(payload["id"]),
+            email=payload.get("email"),
+            metadata=payload.get("user_metadata") or {},
+            app_metadata=payload.get("app_metadata") or {},
+        )
+

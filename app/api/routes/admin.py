@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.api.deps import AdminUser, SettingsDep
 from app.core.errors import ConfigurationError, ExternalServiceError, ResourceNotFoundError
 from app.core.public_messages import sanitize_evidence_for_public
+from app.domain.model_signals import summarize_model_signals
 from app.schemas.coordinate import CoordinateReviewDecision
 from app.schemas.review import (
     CommunityPlaceAdminUpdate,
@@ -149,9 +150,10 @@ async def _fresh_validated_community_duplicate(
             _plain(evidence.get("name")),
             _plain(place.get("nombre") or place.get("name")),
         ).ratio()
-        # A menos de 25 m la categoría basta. Entre 25 y 75 m también se exige
-        # una coincidencia fuerte de nombre para no fusionar atractivos vecinos.
-        if not (distance <= 25 or (distance <= 75 and similarity >= 0.75)):
+        # A menos de 25 m la categoría basta. Entre 25 y 150 m también se exige
+        # una coincidencia fuerte de nombre para no fusionar atractivos vecinos;
+        # lugares extensos como playas o lagos superan con facilidad los 75 m.
+        if not (distance <= 25 or (distance <= 150 and similarity >= 0.75)):
             continue
         matches.append(
             (
@@ -163,6 +165,17 @@ async def _fresh_validated_community_duplicate(
             )
         )
     return min(matches, key=lambda item: item[1]["distance_m"]) if matches else None
+
+
+async def _model_results_or_empty(
+    repository: SupabaseRepository, evidence_ids: list[str]
+) -> dict[str, dict]:
+    # Las señales del modelo son solo informativas: si la consulta falla, el
+    # panel sigue funcionando sin ellas.
+    try:
+        return await repository.latest_model_results_for(evidence_ids)
+    except ExternalServiceError:
+        return {}
 
 
 @router.get("/reviews")
@@ -181,9 +194,15 @@ async def review_queue(
         events = await SupabaseRepository(settings).processing_events_for(
             [str(row["id"]) for row in rows]
         )
+        model_results = await _model_results_or_empty(
+            SupabaseRepository(settings), [str(row["id"]) for row in rows]
+        )
         storage = R2StorageService(settings)
         for row in rows:
             result = results.get(str(row["id"])) or {}
+            row["model_signals"] = summarize_model_signals(
+                model_results.get(str(row["id"]))
+            )
             row["geospatial_result"] = result.get("geospatial_result") or {}
             row["validation_details"] = result
             row["processing_events"] = events.get(str(row["id"]), [])
@@ -213,6 +232,12 @@ async def review_detail(
         )
         row["validation_details"] = results.get(str(evidence_id), {})
         row["processing_events"] = events.get(str(evidence_id), [])
+        model_results = await _model_results_or_empty(
+            SupabaseRepository(settings), [str(evidence_id)]
+        )
+        row["model_signals"] = summarize_model_signals(
+            model_results.get(str(evidence_id))
+        )
         if row.get("object_key"):
             row["photo_url"] = R2StorageService(settings).create_download_url(
                 row["object_key"], expires_in=900
@@ -577,7 +602,11 @@ async def decide_review(
                 status_code=422,
                 detail="Selecciona una categoria antes de validar",
             )
-        if payload.status == "validated":
+        already_targets_community_place = bool(
+            evidence.get("contribution_type") == "existing_place"
+            and evidence.get("target_community_place_id")
+        )
+        if payload.status == "validated" and not already_targets_community_place:
             latest = await repository.latest_results_for([str(evidence_id)])
             latest_result = latest.get(str(evidence_id)) or {}
             duplicate_result = latest_result.get("duplicate_result") or {}
