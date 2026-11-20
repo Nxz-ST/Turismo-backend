@@ -6,10 +6,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.deps import AdminUser, SettingsDep
+from app.api.deps import AdminUser, SettingsDep, clear_suspension_cache
 from app.core.errors import ConfigurationError, ExternalServiceError, ResourceNotFoundError
 from app.core.public_messages import sanitize_evidence_for_public
 from app.domain.model_signals import summarize_model_signals
+from app.domain.suspension import is_active, suspension_until
+from app.schemas.suspension import SuspensionRequest
 from app.schemas.coordinate import CoordinateReviewDecision
 from app.schemas.review import (
     CommunityPlaceAdminUpdate,
@@ -818,3 +820,78 @@ async def decide_coordinate_review(
         )
     except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
         raise _service_error(exc) from exc
+
+
+
+async def _author_id(repository: SupabaseRepository, evidence_id: UUID) -> UUID:
+    evidence = await repository.get_evidence(evidence_id)
+    if not evidence.get("user_id"):
+        raise ResourceNotFoundError("El aporte no tiene autor registrado")
+    return UUID(str(evidence["user_id"]))
+
+
+def _suspension_state(row: dict | None) -> dict:
+    active = is_active(row)
+    return {
+        "suspended": active,
+        "reason": row.get("reason") if active and row else None,
+        "suspended_until": row.get("suspended_until") if active and row else None,
+    }
+
+
+@router.get("/suspensions")
+async def list_suspensions(_: AdminUser, settings: SettingsDep) -> list[dict]:
+    try:
+        rows = await SupabaseRepository(settings).list_account_suspensions()
+    except (ConfigurationError, ExternalServiceError) as exc:
+        raise _service_error(exc) from exc
+    return [row for row in rows if is_active(row)]
+
+
+@router.get("/reviews/{evidence_id}/author-suspension")
+async def author_suspension(evidence_id: UUID, _: AdminUser, settings: SettingsDep) -> dict:
+    try:
+        repository = SupabaseRepository(settings)
+        user_id = await _author_id(repository, evidence_id)
+        return _suspension_state(await repository.get_account_suspension(user_id))
+    except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
+        raise _service_error(exc) from exc
+
+
+@router.put("/reviews/{evidence_id}/author-suspension")
+async def suspend_author(
+    evidence_id: UUID,
+    payload: SuspensionRequest,
+    admin: AdminUser,
+    settings: SettingsDep,
+) -> dict:
+    until = suspension_until(payload.days)
+    try:
+        repository = SupabaseRepository(settings)
+        user_id = await _author_id(repository, evidence_id)
+        if user_id == admin.id:
+            raise HTTPException(status_code=400, detail="No puedes bloquear tu propia cuenta")
+        row = await repository.suspend_account(
+            user_id=user_id,
+            reason=payload.reason,
+            suspended_until=until.isoformat() if until else None,
+            actor_id=admin.id,
+        )
+    except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
+        raise _service_error(exc) from exc
+    clear_suspension_cache(user_id)
+    return _suspension_state(row)
+
+
+@router.delete("/reviews/{evidence_id}/author-suspension")
+async def lift_author_suspension(
+    evidence_id: UUID, admin: AdminUser, settings: SettingsDep
+) -> dict:
+    try:
+        repository = SupabaseRepository(settings)
+        user_id = await _author_id(repository, evidence_id)
+        await repository.lift_account_suspension(user_id=user_id, actor_id=admin.id)
+    except (ConfigurationError, ExternalServiceError, ResourceNotFoundError) as exc:
+        raise _service_error(exc) from exc
+    clear_suspension_cache(user_id)
+    return _suspension_state(None)

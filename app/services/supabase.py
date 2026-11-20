@@ -518,6 +518,86 @@ class SupabaseRepository:
         )
         return response.json()[0]
 
+    async def get_account_suspension(self, user_id: UUID) -> dict[str, Any] | None:
+        response = await self._request(
+            "GET",
+            "account_suspensions",
+            params={"user_id": f"eq.{user_id}", "limit": "1"},
+        )
+        rows = response.json()
+        return rows[0] if rows else None
+
+    async def list_account_suspensions(self) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            "account_suspensions",
+            params={"select": "*", "order": "created_at.desc"},
+        )
+        return response.json()
+
+    async def suspend_account(
+        self,
+        *,
+        user_id: UUID,
+        reason: str,
+        suspended_until: str | None,
+        actor_id: UUID,
+    ) -> dict[str, Any]:
+        row = {
+            "user_id": str(user_id),
+            "reason": reason,
+            "suspended_until": suspended_until,
+            "suspended_by": str(actor_id),
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        response = await self._request(
+            "POST",
+            "account_suspensions",
+            params={"on_conflict": "user_id"},
+            headers={
+                **self._headers,
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            },
+            json=row,
+        )
+        await self._log_suspension_event(
+            user_id=user_id,
+            action="suspend",
+            reason=reason,
+            suspended_until=suspended_until,
+            actor_id=actor_id,
+        )
+        return response.json()[0]
+
+    async def lift_account_suspension(self, *, user_id: UUID, actor_id: UUID) -> None:
+        await self._request(
+            "DELETE",
+            "account_suspensions",
+            params={"user_id": f"eq.{user_id}"},
+        )
+        await self._log_suspension_event(user_id=user_id, action="lift", actor_id=actor_id)
+
+    async def _log_suspension_event(
+        self,
+        *,
+        user_id: UUID,
+        action: str,
+        actor_id: UUID,
+        reason: str | None = None,
+        suspended_until: str | None = None,
+    ) -> None:
+        await self._request(
+            "POST",
+            "suspension_events",
+            json={
+                "user_id": str(user_id),
+                "action": action,
+                "reason": reason,
+                "suspended_until": suspended_until,
+                "actor_id": str(actor_id),
+            },
+        )
+
     async def save_presence_samples(
         self, *, user_id: UUID, samples: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
